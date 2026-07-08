@@ -83,6 +83,10 @@ def main() -> int:
     db_p.add_argument("--out", default="kaos-dashboard.html", help="output HTML file")
     db_p.add_argument("--events", action="store_true", help="include source events in the graph")
 
+    sv_p = sub.add_parser("serve", help="serve the live FastAPI dashboard")
+    sv_p.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
+    sv_p.add_argument("--port", type=int, default=8000, help="bind port (default 8000)")
+
     sc_p = sub.add_parser("schedule", help="run subscriptions periodically (idempotent)")
     sc_p.add_argument(
         "--interval",
@@ -101,9 +105,9 @@ def main() -> int:
 
     a = p.parse_args()
     if a.cmd == "doctor":
-        print("Environment OK (alpha)")
+        print("Environment OK (beta)")
     elif a.cmd == "version":
-        print("KAOS 1.0.0-alpha.1")
+        print("KAOS 1.0.0-beta.1")
     elif a.cmd == "up":
         import asyncio
 
@@ -201,6 +205,10 @@ def main() -> int:
         return asyncio.run(
             run_dashboard(workspace=a.workspace, out=a.out, include_events=a.events)
         )
+    elif a.cmd == "serve":
+        from kaos.cli.knowledge import run_serve
+
+        return run_serve(host=a.host, port=a.port)
     elif a.cmd == "schedule":
         import asyncio
 

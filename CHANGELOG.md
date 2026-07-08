@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+
+## 1.0.0-beta.1 — 2026-07-08
+- Live dashboard: `create_app()` (`src/kaos/plugins/dashboard/app.py`) serves a
+  read-only FastAPI app that reads `Storage` on each request, so the view is
+  always current. Routes: `/` (HTML), `/api/workspaces`, `/api/knowledge`
+  (graph JSON), `/api/artifacts`. `kaos serve [--host] [--port]` runs it via
+  uvicorn (optional extra `.[dashboard]`). A shared service
+  (`plugins/dashboard/service.py`) backs both the CLI and the app. ADR-0011.
+- License: MIT (`LICENSE`); declared in `pyproject.toml`.
 - Knowledge Graph (`src/kaos/core/knowledge.py`): a read-model over the `Storage`
   contract that projects stored artifacts (and optionally their source events)
   into nodes/edges — no new datastore. Exports to dict (JSON) and Mermaid.

@@ -46,7 +46,7 @@ def create_venv() -> None:
 
 
 def main() -> int:
-    print("KAOS Bootstrap — v1.0.0-alpha")
+    print("KAOS Bootstrap — v1.0.0-beta")
     print(f"OS: {platform.system()} {platform.release()}")
 
     python_ok = check_python()

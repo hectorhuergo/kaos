@@ -1,9 +1,14 @@
 [project]
 name="kaos"
-version="1.0.0a1"
+version="1.0.0b1"
 requires-python=">=3.13"
 description="KAOS — Knowledge Analysis & Orchestration System"
 readme="README.md"
+license={text="MIT"}
+classifiers=[
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies=[
     "fastapi>=0.115",
     "pydantic>=2.9",
@@ -21,6 +26,9 @@ discord=[
 ]
 postgres=[
     "asyncpg>=0.29",
+]
+dashboard=[
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]

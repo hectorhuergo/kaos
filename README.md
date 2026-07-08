@@ -1,6 +1,6 @@
 # KAOS — Knowledge Analysis & Orchestration System
 
-**v1.0.0-alpha**
+**v1.0.0-beta**
 
 KAOS es una plataforma para transformar información no estructurada
 (conversaciones, documentos, eventos y sistemas externos) en **conocimiento
@@ -86,8 +86,8 @@ uv run kaos version
 Salida esperada:
 
 ```
-Environment OK (alpha)
-KAOS 1.0.0-alpha.1
+Environment OK (beta)
+KAOS 1.0.0-beta.1
 ```
 
 ### 4. Levantar la infraestructura (opcional)
@@ -250,6 +250,17 @@ trazabilidad), sin servidor: se abre en el navegador.
 kaos dashboard --workspace <forum_id> --out kaos-dashboard.html
 ```
 
+O levantar el **dashboard vivo** (FastAPI): siempre refleja el estado actual,
+con API JSON. Requiere el extra `.[dashboard]` (uvicorn):
+
+```bash
+uv pip install -e .[dashboard]
+kaos serve --port 8000            # http://127.0.0.1:8000
+```
+
+Rutas: `/` (HTML), `/api/workspaces`, `/api/knowledge`, `/api/artifacts`
+(todas aceptan `?workspace=<id>` y `?events=true`).
+
 ### Pruebas
 
 ```bash
@@ -294,4 +305,4 @@ tests/              # pruebas
 
 ## Licencia
 
-Proyecto en etapa alpha. La licencia se definirá antes de la beta.
+MIT — ver [`LICENSE`](LICENSE).

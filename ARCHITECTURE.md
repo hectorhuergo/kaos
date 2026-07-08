@@ -111,4 +111,7 @@ el contrato `Storage`, con exportadores a JSON y Mermaid. El
 `src/kaos/plugins/dashboard/` renderiza esa proyección como un HTML autocontenido
 (tarjetas de resumen + grafo de trazabilidad). `kaos knowledge` y `kaos dashboard`
 son las vistas de CLI (Knowledge before Reports; ver `docs/adr/ADR-0010.md`).
+Además, `create_app()` expone un **dashboard vivo** (FastAPI read-only, siempre
+al día, con API JSON en `/api/knowledge`, `/api/artifacts`, `/api/workspaces`);
+`kaos serve` lo levanta con uvicorn (ver `docs/adr/ADR-0011.md`).
 

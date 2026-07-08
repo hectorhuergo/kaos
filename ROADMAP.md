@@ -21,7 +21,7 @@
 - [x] Scheduler (`kaos schedule`, corre `kaos run` idempotente en intervalo)
 - [x] Knowledge Graph (`kaos knowledge`, proyección sobre artifacts/eventos)
 - [x] Dashboard estático (`kaos dashboard`, HTML autocontenido)
-- [ ] Dashboard vivo (servicio FastAPI: filtrado, búsqueda)
+- [x] Dashboard vivo (`kaos serve`, app FastAPI read-only con API JSON)
 - [ ] GitHub Connector
 - [ ] Odoo Connector
 - [ ] Multi-workspace
