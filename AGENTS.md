@@ -131,6 +131,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ARCHITECTURE.md
 - ROADMAP.md
 - CONTRIBUTING.md
+- docs/QUICKSTART.md
 
 ## Coding Principles
 

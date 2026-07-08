@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Docs: `docs/QUICKSTART.md` — get KAOS running in minutes (offline demo, real
+  Discord + LLM run, subscriptions/scheduler, knowledge/dashboard, plugin
+  scaffolding, troubleshooting); linked from the README.
 
 ## 1.0.0-beta.1 — 2026-07-08
 - Live dashboard: `create_app()` (`src/kaos/plugins/dashboard/app.py`) serves a

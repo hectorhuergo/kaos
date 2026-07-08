@@ -27,6 +27,8 @@ Connectors -> Event Bus -> Runtime / Core -> Agents -> Knowledge -> Publishers
 El Kernel gira alrededor de contratos públicos estables en
 `src/kaos/contracts/`. Ver `ARCHITECTURE.md` y los ADR en `docs/adr/`.
 
+> 🚀 **¿Apurado?** Seguí la [Quick Start](docs/QUICKSTART.md) para arrancar en minutos.
+
 ## Requisitos
 
 | Herramienta | Versión | Necesario para |
@@ -296,6 +298,7 @@ tests/              # pruebas
 ## Documentación
 
 - `AGENTS.md` — contexto mínimo para agentes (humanos o IA).
+- `docs/QUICKSTART.md` — guía para arrancar en minutos.
 - `ARCHITECTURE.md` — visión de arquitectura.
 - `ROADMAP.md` — hoja de ruta.
 - `CONTRIBUTING.md` — guía de contribución.
