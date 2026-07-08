@@ -208,6 +208,18 @@ kaos run --consolidated --dry-run   # previsualizar
 kaos run --consolidated             # publicar en el resume-thread de cada una
 ```
 
+### GitHub (dogfooding)
+
+KAOS puede resumir la actividad de un repositorio (commits, issues, PRs) —
+incluido el suyo propio. Requiere `KAOS_GITHUB_TOKEN` con acceso de lectura:
+
+```bash
+kaos github hectorhuergo/kaos --dry-run   # imprime el resumen por consola
+kaos github <owner/repo>                  # publica según tu configuración
+```
+
+El repo también puede fijarse con `KAOS_GITHUB_REPO`.
+
 ### Proveedores LLM
 
 Inspeccioná qué proveedores hay, cuál está activo y si tiene credencial (no se

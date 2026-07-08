@@ -87,6 +87,12 @@ def main() -> int:
     sv_p.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
     sv_p.add_argument("--port", type=int, default=8000, help="bind port (default 8000)")
 
+    gh_p = sub.add_parser("github", help="summarize a GitHub repository's recent activity")
+    gh_p.add_argument("repo", nargs="?", default=None, help="owner/repo (default KAOS_GITHUB_REPO)")
+    gh_p.add_argument("--dry-run", action="store_true", help="print to console instead of publishing")
+    gh_p.add_argument("--limit", type=int, default=30, help="max items per kind (default 30)")
+    gh_p.add_argument("--no-issues", action="store_true", help="commits only (skip issues/PRs)")
+
     sc_p = sub.add_parser("schedule", help="run subscriptions periodically (idempotent)")
     sc_p.add_argument(
         "--interval",
@@ -209,6 +215,16 @@ def main() -> int:
         from kaos.cli.knowledge import run_serve
 
         return run_serve(host=a.host, port=a.port)
+    elif a.cmd == "github":
+        import asyncio
+
+        from kaos.cli.github import run_github
+
+        return asyncio.run(
+            run_github(
+                a.repo, dry_run=a.dry_run, limit=a.limit, include_issues=not a.no_issues
+            )
+        )
     elif a.cmd == "schedule":
         import asyncio
 

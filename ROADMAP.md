@@ -22,7 +22,7 @@
 - [x] Knowledge Graph (`kaos knowledge`, proyección sobre artifacts/eventos)
 - [x] Dashboard estático (`kaos dashboard`, HTML autocontenido)
 - [x] Dashboard vivo (`kaos serve`, app FastAPI read-only con API JSON)
-- [ ] GitHub Connector
+- [x] GitHub Connector (`kaos github`, resume la actividad de un repo)
 - [ ] Odoo Connector
 - [ ] Multi-workspace
 

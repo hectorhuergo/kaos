@@ -71,6 +71,20 @@ sobre PostgreSQL/MinIO) sin tocar Connectors, Agents ni Publishers.
 - `redaction.py` — redacción de secretos (seed phrases, claves privadas, tokens)
   antes de que un texto llegue al LLM o se publique como Artifact.
 
+## Connectors
+
+Los connectors viven en `src/kaos/plugins/connectors/` y producen eventos desde
+sistemas externos, dependiendo de una *source* inyectable (testeable sin red):
+
+- **Discord** — gateway en vivo (`DiscordGatewaySource`) y backfill por REST
+  (`DiscordBackfillSource`, foros e hilos).
+- **GitHub** — `GitHubConnector` + `GitHubRestSource` resumen la actividad de un
+  repo (commits, issues, PRs) hacia eventos `message.created`; KAOS resume su
+  propio desarrollo (`kaos github`, dogfooding; ver `docs/adr/ADR-0012.md`).
+
+Cada item se mapea a un evento `message.created` y, al terminar la ventana, el
+connector emite `conversation.completed` para que el Resume Agent corra una vez.
+
 ## Agents
 
 Los agentes viven en `src/kaos/plugins/agents/` y dependen solo de contratos:

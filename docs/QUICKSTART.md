@@ -92,6 +92,13 @@ docker compose -f docker/docker-compose.yml up -d postgres
 # .env -> KAOS_DATABASE_URL=postgresql://kaos:kaos@localhost:5432/kaos
 ```
 
+### 3.4 Resumir un repo de GitHub (dogfooding)
+
+```bash
+kaos github hectorhuergo/kaos --dry-run   # resume commits/issues/PRs por consola
+kaos github <owner/repo>                  # publica según tu configuración
+```
+
 ## 4. Automatizar con suscripciones + scheduler
 
 ```bash

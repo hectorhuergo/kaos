@@ -54,6 +54,9 @@ class Settings(BaseModel):
     github_token: str | None = None
     anthropic_api_key: str | None = None
 
+    # GitHub connector (summarize a repository's recent activity)
+    github_repo: str | None = None
+
     # Discord
     discord_token: str | None = None
     discord_guild_id: str | None = None
@@ -123,6 +126,7 @@ class Settings(BaseModel):
             llm_timeout=llm_timeout,
             github_token=get("KAOS_GITHUB_TOKEN") or get("GITHUB_TOKEN"),
             anthropic_api_key=get("KAOS_ANTHROPIC_API_KEY") or get("ANTHROPIC_API_KEY"),
+            github_repo=get("KAOS_GITHUB_REPO"),
             discord_token=get("KAOS_DISCORD_TOKEN"),
             discord_guild_id=get("KAOS_DISCORD_GUILD_ID"),
             discord_channel_ids=channels,

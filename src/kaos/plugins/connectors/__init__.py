@@ -13,6 +13,13 @@ from kaos.plugins.connectors.discord_connector import (
     StaticDiscordSource,
 )
 from kaos.plugins.connectors.discord_gateway import DiscordGatewaySource
+from kaos.plugins.connectors.github_connector import (
+    GitHubActivitySource,
+    GitHubConnector,
+    GitHubItem,
+    StaticGitHubSource,
+)
+from kaos.plugins.connectors.github_rest import GitHubRestSource
 
 __all__ = [
     "DiscordBackfillSource",
@@ -20,7 +27,12 @@ __all__ = [
     "DiscordGatewaySource",
     "DiscordMessage",
     "DiscordMessageSource",
+    "GitHubActivitySource",
+    "GitHubConnector",
+    "GitHubItem",
+    "GitHubRestSource",
     "StaticDiscordSource",
+    "StaticGitHubSource",
     "list_forum_threads",
 ]
 

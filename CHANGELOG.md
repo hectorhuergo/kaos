@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- GitHub Connector: `GitHubConnector` + `GitHubRestSource`
+  (`src/kaos/plugins/connectors/`) turn a repository's recent commits and
+  issues/PRs into `message.created` events, so the Resume Agent summarizes a
+  repo's activity into knowledge (KAOS dogfooding its own development). CLI
+  `kaos github [<owner/repo>] [--dry-run] [--limit N] [--no-issues]`; repo also
+  via `KAOS_GITHUB_REPO`. ADR-0012.
 - Docs: `docs/QUICKSTART.md` — get KAOS running in minutes (offline demo, real
   Discord + LLM run, subscriptions/scheduler, knowledge/dashboard, plugin
   scaffolding, troubleshooting); linked from the README.
