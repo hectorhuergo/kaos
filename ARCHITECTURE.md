@@ -101,3 +101,14 @@ disponibles y `kaos providers` reporta cuál está activo y si tiene credencial.
 La selección concreta la resuelve la composición root según `KAOS_LLM_PROVIDER`
 (ver `docs/adr/ADR-0005.md` y `docs/adr/ADR-0009.md`).
 
+## Knowledge Layer
+
+El conocimiento acumulado son los `Artifact`s persistidos, y como cada uno traza
+a sus `source_events`, esa estructura ya es un grafo. `src/kaos/core/knowledge.py`
+la **proyecta** (sin datastore nuevo): `build_graph()` produce nodos
+(`workspace`, `artifact`, `event`) y aristas (`contains`, `derived_from`) sobre
+el contrato `Storage`, con exportadores a JSON y Mermaid. El
+`src/kaos/plugins/dashboard/` renderiza esa proyección como un HTML autocontenido
+(tarjetas de resumen + grafo de trazabilidad). `kaos knowledge` y `kaos dashboard`
+son las vistas de CLI (Knowledge before Reports; ver `docs/adr/ADR-0010.md`).
+

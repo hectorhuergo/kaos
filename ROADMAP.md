@@ -19,8 +19,9 @@
 ## Beta — progreso
 - [x] Configuración de providers (`kaos providers`, catálogo agnóstico)
 - [x] Scheduler (`kaos schedule`, corre `kaos run` idempotente en intervalo)
-- [ ] Knowledge Graph
-- [ ] Dashboard
+- [x] Knowledge Graph (`kaos knowledge`, proyección sobre artifacts/eventos)
+- [x] Dashboard estático (`kaos dashboard`, HTML autocontenido)
+- [ ] Dashboard vivo (servicio FastAPI: filtrado, búsqueda)
 - [ ] GitHub Connector
 - [ ] Odoo Connector
 - [ ] Multi-workspace

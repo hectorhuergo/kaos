@@ -68,6 +68,21 @@ def main() -> int:
 
     sub.add_parser("providers", help="list LLM providers and their readiness")
 
+    kn_p = sub.add_parser("knowledge", help="inspect the accumulated knowledge graph")
+    kn_p.add_argument("--workspace", default=None, help="workspace or Discord id (default: subscriptions)")
+    kn_p.add_argument(
+        "--format",
+        choices=("text", "mermaid", "json"),
+        default="text",
+        help="output format (default: text)",
+    )
+    kn_p.add_argument("--events", action="store_true", help="include source events as nodes")
+
+    db_p = sub.add_parser("dashboard", help="write a self-contained HTML dashboard")
+    db_p.add_argument("--workspace", default=None, help="workspace or Discord id (default: subscriptions)")
+    db_p.add_argument("--out", default="kaos-dashboard.html", help="output HTML file")
+    db_p.add_argument("--events", action="store_true", help="include source events in the graph")
+
     sc_p = sub.add_parser("schedule", help="run subscriptions periodically (idempotent)")
     sc_p.add_argument(
         "--interval",
@@ -170,6 +185,22 @@ def main() -> int:
         from kaos.cli.providers import list_providers
 
         return list_providers()
+    elif a.cmd == "knowledge":
+        import asyncio
+
+        from kaos.cli.knowledge import run_knowledge
+
+        return asyncio.run(
+            run_knowledge(workspace=a.workspace, fmt=a.format, include_events=a.events)
+        )
+    elif a.cmd == "dashboard":
+        import asyncio
+
+        from kaos.cli.knowledge import run_dashboard
+
+        return asyncio.run(
+            run_dashboard(workspace=a.workspace, out=a.out, include_events=a.events)
+        )
     elif a.cmd == "schedule":
         import asyncio
 

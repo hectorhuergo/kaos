@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- Knowledge Graph (`src/kaos/core/knowledge.py`): a read-model over the `Storage`
+  contract that projects stored artifacts (and optionally their source events)
+  into nodes/edges — no new datastore. Exports to dict (JSON) and Mermaid.
+- Dashboard (`src/kaos/plugins/dashboard/`): a self-contained HTML view of the
+  knowledge (summary cards + Mermaid traceability graph); no server needed.
+  Mermaid loads as a classic UMD script (an ES-module import of the UMD build
+  rendered as raw text) and the graph sits in a scrollable container so dense
+  graphs stay legible; graph labels are sanitized for the Mermaid parser.
+- CLI: `kaos knowledge [--workspace W] [--format text|mermaid|json] [--events]`
+  and `kaos dashboard [--workspace W] [--out FILE] [--events]`. Workspaces default
+  to the active subscriptions; a bare Discord id is normalized to `discord:<id>`.
+- ADR-0010 — Knowledge Layer & Graph.
 - Docs: aligned `ARCHITECTURE.md` (Core section: provider catalog, summary cache,
   redaction; Scheduler in Runtime; timestamp-aware transcripts), refreshed the
   `docs/` stubs (`ARCHITECTURE.md`, `ROADMAP.md`) and expanded `CONTRIBUTING.md`

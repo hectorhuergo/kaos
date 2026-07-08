@@ -230,6 +230,26 @@ kaos schedule --interval 300 --consolidated  # cada 5 min
 kaos schedule --once --consolidated          # una sola pasada (para un cron externo)
 ```
 
+### Conocimiento (Knowledge Graph & Dashboard)
+
+El conocimiento acumulado (los `Artifact`s) se puede **consultar** como grafo.
+Los workspaces se toman de `--workspace` o, si se omite, de las suscripciones
+activas:
+
+```bash
+kaos knowledge                              # lista los artifacts de las suscripciones
+kaos knowledge --workspace <forum_id>       # un workspace puntual (id o discord:<id>)
+kaos knowledge --format mermaid --events    # grafo de trazabilidad (con eventos)
+kaos knowledge --format json                # export JSON
+```
+
+Y generar un **dashboard HTML autocontenido** (resúmenes + grafo de
+trazabilidad), sin servidor: se abre en el navegador.
+
+```bash
+kaos dashboard --workspace <forum_id> --out kaos-dashboard.html
+```
+
 ### Pruebas
 
 ```bash
