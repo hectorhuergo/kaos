@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Demo: `docs/DEMO.md` (guion para presentar KAOS) + `scripts/demo.ps1` (demo
+  reproducible en Windows que espera a Postgres por healthcheck y usa
+  `python -m kaos.cli.main` cuando no existe el ejecutable `kaos`).
+- CLI: `kaos up --offline` corre el demo determinístico (StaticDiscordSource +
+  EchoLLMProvider + ConsolePublisher), ignorando `.env` — antes `kaos up`
+  intentaba el gateway real si había `KAOS_DISCORD_TOKEN`.
+- docker-compose: nombre de proyecto `kaos` (contenedor `kaos-postgres-1`, antes
+  `docker-postgres-1`) y **healthcheck** de Postgres (`docker compose up -d
+  --wait postgres` espera a que esté listo — sin reintentos).
 - GitHub Connector: `GitHubConnector` + `GitHubRestSource`
   (`src/kaos/plugins/connectors/`) turn a repository's recent commits and
   issues/PRs into `message.created` events, so the Resume Agent summarizes a

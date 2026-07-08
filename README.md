@@ -103,8 +103,9 @@ Levanta PostgreSQL (5432), Redis (6379) y MinIO (9000 / consola 9001).
 ## Configuración (.env)
 
 `kaos up` se arma desde variables de entorno. Copia `.env.example` a `.env` y
-completa lo que necesites. **Todo es opcional**: sin configuración, `kaos up`
-corre un demo offline (conversación estática + salida por consola).
+completa lo que necesites. **Todo es opcional**: `kaos up --offline` corre un
+demo determinístico (conversación estática + salida por consola, sin
+credenciales); `kaos up` a secas arranca el runtime según tu `.env`.
 
 | Variable | Descripción |
 |----------|-------------|
@@ -311,6 +312,7 @@ tests/              # pruebas
 
 - `AGENTS.md` — contexto mínimo para agentes (humanos o IA).
 - `docs/QUICKSTART.md` — guía para arrancar en minutos.
+- `docs/DEMO.md` — guion de demo + `scripts/demo.ps1` reproducible.
 - `ARCHITECTURE.md` — visión de arquitectura.
 - `ROADMAP.md` — hoja de ruta.
 - `CONTRIBUTING.md` — guía de contribución.

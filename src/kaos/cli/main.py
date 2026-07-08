@@ -9,8 +9,15 @@ def main() -> int:
     load_dotenv()  # composition root: make `.env` available to all commands
     p = argparse.ArgumentParser(prog="kaos")
     sub = p.add_subparsers(dest="cmd")
-    for c in ("doctor", "version", "init", "up", "down"):
+    for c in ("doctor", "version", "init", "down"):
         sub.add_parser(c)
+
+    up_p = sub.add_parser("up", help="start the runtime from .env (or --offline demo)")
+    up_p.add_argument(
+        "--offline",
+        action="store_true",
+        help="run the deterministic offline demo (no credentials, ignores .env)",
+    )
 
     new_p = sub.add_parser("new", help="scaffold a new plugin")
     new_p.add_argument("kind", choices=VALID_KINDS, help="plugin type")
@@ -117,9 +124,9 @@ def main() -> int:
     elif a.cmd == "up":
         import asyncio
 
-        from kaos.runtime.demo import run_demo
+        from kaos.runtime.demo import run_demo, run_offline_demo
 
-        asyncio.run(run_demo())
+        asyncio.run(run_offline_demo() if a.offline else run_demo())
         return 0
     elif a.cmd == "backfill":
         import asyncio

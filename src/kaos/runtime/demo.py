@@ -69,3 +69,18 @@ async def run_demo() -> None:
     await runtime.stop()
     print("Done.")
 
+
+async def run_offline_demo() -> None:
+    """Run the fully offline demo pipeline, ignoring the environment.
+
+    Uses in-repo plugins only (StaticDiscordSource + EchoLLMProvider +
+    ConsolePublisher), so it always works without any credential — deterministic
+    for demos and first runs regardless of what `.env` contains.
+    """
+    runtime = build_demo_runtime()
+    print("KAOS up (offline) — Connector -> Agent -> Publisher (sin credenciales)\n")
+    await runtime.start()
+    await runtime.stop()
+    print("Done.")
+
+

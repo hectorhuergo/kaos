@@ -41,11 +41,12 @@ Sin `.env`, KAOS corre una conversación de ejemplo y publica el resumen por
 consola:
 
 ```bash
-kaos up
+kaos up --offline
 ```
 
 Esto ejercita el pipeline completo **Connector → Agent → Publisher** con el
-`EchoLLMProvider` (sin red).
+`EchoLLMProvider` (sin red, determinístico). `kaos up` a secas arranca el runtime
+según tu `.env`.
 
 ## 3. Corrida real (Discord + LLM, ~5 min)
 
