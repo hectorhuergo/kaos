@@ -1,0 +1,27 @@
+"""__CLASS_NAME__: a KAOS connector."""
+
+from __future__ import annotations
+
+from kaos.contracts.event import Event
+from kaos.contracts.event_bus import EventBus
+
+
+class __CLASS_NAME__:
+    """TODO: describe the external system this connector adapts into events."""
+
+    name = "__PLUGIN_NAME__"
+
+    async def start(self, bus: EventBus) -> None:
+        """Begin producing events onto the bus."""
+        await bus.publish(
+            Event(
+                type="__PLUGIN_NAME__.started",
+                source=self.name,
+                workspace="default",
+            )
+        )
+
+    async def stop(self) -> None:
+        """Stop producing events and release resources."""
+        ...
+

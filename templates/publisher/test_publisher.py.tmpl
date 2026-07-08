@@ -1,0 +1,16 @@
+"""Tests for __CLASS_NAME__."""
+
+from __future__ import annotations
+
+import asyncio
+
+from kaos.contracts import Artifact
+from kaos.plugins.publishers.__MODULE_NAME__ import __CLASS_NAME__
+
+
+def test___MODULE_NAME___publishes() -> None:
+    publisher = __CLASS_NAME__()
+    artifact = Artifact(kind="test", workspace="w1", produced_by="t")
+    asyncio.run(publisher.publish(artifact))
+    assert publisher.name == "__PLUGIN_NAME__"
+

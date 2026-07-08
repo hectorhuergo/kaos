@@ -1,0 +1,31 @@
+"""__CLASS_NAME__: a KAOS agent."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from kaos.contracts.artifact import Artifact
+from kaos.contracts.context import Context
+
+
+class __CLASS_NAME__:
+    """TODO: describe what this agent turns into knowledge."""
+
+    name = "__PLUGIN_NAME__"
+
+    def accepts(self, context: Context) -> bool:
+        """Return whether this agent can handle the given context."""
+        return bool(context.events)
+
+    async def run(self, context: Context) -> Sequence[Artifact]:
+        """Transform the context into artifacts."""
+        return [
+            Artifact(
+                kind="__PLUGIN_NAME__.result",
+                workspace=context.workspace,
+                produced_by=self.name,
+                content={},
+                source_events=tuple(event.id for event in context.events),
+            )
+        ]
+

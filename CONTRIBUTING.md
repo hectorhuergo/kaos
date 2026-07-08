@@ -1,0 +1,2 @@
+# Contributing
+Use semantic commits.

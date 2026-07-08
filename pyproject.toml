@@ -1,0 +1,59 @@
+[project]
+name="kaos"
+version="1.0.0a1"
+requires-python=">=3.13"
+description="KAOS — Knowledge Analysis & Orchestration System"
+readme="README.md"
+dependencies=[
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev=[
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=9.0.3",
+]
+discord=[
+    "discord.py>=2.4",
+]
+postgres=[
+    "asyncpg>=0.29",
+]
+
+[project.scripts]
+kaos="kaos.cli.main:main"
+
+[build-system]
+requires=["setuptools>=69"]
+build-backend="setuptools.build_meta"
+
+[tool.setuptools]
+package-dir={""="src"}
+
+[tool.setuptools.package-data]
+kaos=["py.typed"]
+
+[tool.setuptools.packages.find]
+where=["src"]
+
+[tool.ruff]
+line-length=100
+target-version="py313"
+src=["src", "tests"]
+
+[tool.ruff.lint]
+select=["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version="3.13"
+strict=true
+packages=["kaos"]
+mypy_path="src"
+
+[tool.pytest.ini_options]
+testpaths=["tests"]
+pythonpath=["src"]
+

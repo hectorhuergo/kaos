@@ -1,0 +1,19 @@
+"""Tests for __CLASS_NAME__."""
+
+from __future__ import annotations
+
+import asyncio
+
+from kaos.contracts import Context, Event
+from kaos.plugins.agents.__MODULE_NAME__ import __CLASS_NAME__
+
+
+def test___MODULE_NAME___produces_artifact() -> None:
+    agent = __CLASS_NAME__()
+    event = Event(type="message.created", source="test", workspace="w1")
+    context = Context(workspace="w1", events=(event,))
+    assert agent.accepts(context)
+    artifacts = asyncio.run(agent.run(context))
+    assert artifacts[0].produced_by == "__PLUGIN_NAME__"
+    assert artifacts[0].source_events == (event.id,)
+

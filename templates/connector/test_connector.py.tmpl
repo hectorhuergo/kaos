@@ -1,0 +1,25 @@
+"""Tests for __CLASS_NAME__."""
+
+from __future__ import annotations
+
+import asyncio
+
+from kaos.contracts import Event
+from kaos.plugins.connectors.__MODULE_NAME__ import __CLASS_NAME__
+from kaos.runtime import InMemoryEventBus
+
+
+def test___MODULE_NAME___emits_event() -> None:
+    bus = InMemoryEventBus()
+    seen: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        seen.append(event)
+
+    async def scenario() -> None:
+        bus.subscribe("*", handler)
+        await __CLASS_NAME__().start(bus)
+
+    asyncio.run(scenario())
+    assert len(seen) == 1
+

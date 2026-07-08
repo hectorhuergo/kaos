@@ -1,0 +1,16 @@
+"""__CLASS_NAME__: a KAOS publisher."""
+
+from __future__ import annotations
+
+from kaos.contracts.artifact import Artifact
+
+
+class __CLASS_NAME__:
+    """TODO: describe where this publisher exposes knowledge."""
+
+    name = "__PLUGIN_NAME__"
+
+    async def publish(self, artifact: Artifact) -> None:
+        """Expose the given artifact through this publisher's medium."""
+        ...
+
