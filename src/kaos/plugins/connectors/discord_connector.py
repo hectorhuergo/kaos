@@ -29,6 +29,7 @@ class DiscordMessage(BaseModel):
     guild_id: str
     author: str
     text: str
+    timestamp: str | None = None
 
 
 @runtime_checkable
@@ -103,15 +104,20 @@ class DiscordConnector:
         await self._source.close()
 
     def _to_event(self, message: DiscordMessage) -> Event:
+        payload = {
+            "author": message.author,
+            "text": message.text,
+            "channel_id": message.channel_id,
+            "message_id": message.message_id,
+        }
+        # Only carry the timestamp when known, so events without one keep a
+        # minimal payload (and existing consumers/tests stay unaffected).
+        if message.timestamp:
+            payload["timestamp"] = message.timestamp
         return Event(
             type=EVENT_TYPE,
             source=self.name,
             workspace=f"{self._prefix}:{message.guild_id}",
-            payload={
-                "author": message.author,
-                "text": message.text,
-                "channel_id": message.channel_id,
-                "message_id": message.message_id,
-            },
+            payload=payload,
         )
 

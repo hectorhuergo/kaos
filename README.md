@@ -110,6 +110,7 @@ corre un demo offline (conversación estática + salida por consola).
 | `KAOS_LLM_MODEL` | Modelo, p. ej. `gpt-4o-mini` o `claude-3-5-haiku-latest` |
 | `KAOS_LLM_API_KEY` | API key para `openai` |
 | `KAOS_LLM_BASE_URL` | Endpoint OpenAI-compatible (OpenAI, Azure, Ollama…) |
+| `KAOS_LLM_TIMEOUT` | Timeout (s) por llamada al LLM; súbelo para modelos de razonamiento (default 120) |
 | `KAOS_GITHUB_TOKEN` / `GITHUB_TOKEN` | Token para GitHub Models (`github`) |
 | `KAOS_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | API key para Claude (`anthropic`) |
 | `KAOS_DISCORD_TOKEN` | Token del bot; si está, usa Discord real |
@@ -121,6 +122,7 @@ corre un demo offline (conversación estática + salida por consola).
 | `KAOS_DISCORD_BACKFILL_CHANNEL_ID` | Hilo/canal a leer por REST y resumir (backfill) |
 | `KAOS_DISCORD_MESSAGE_LIMIT` | Máximo de mensajes históricos a leer (default 100) |
 | `KAOS_DATABASE_URL` | DSN de PostgreSQL; si está, persiste eventos y artifacts |
+| `KAOS_SCHEDULER_INTERVAL` | Segundos entre corridas de `kaos schedule` (default 900) |
 
 Para usar Discord real instala el extra:
 
@@ -202,6 +204,30 @@ Luego `kaos run` resume todas las suscripciones activas (reutilizando la cache):
 ```bash
 kaos run --consolidated --dry-run   # previsualizar
 kaos run --consolidated             # publicar en el resume-thread de cada una
+```
+
+### Proveedores LLM
+
+Inspeccioná qué proveedores hay, cuál está activo y si tiene credencial (no se
+imprimen secretos):
+
+```bash
+kaos providers
+```
+
+Seleccioná con `KAOS_LLM_PROVIDER=<echo|openai|github|anthropic>` y
+`KAOS_LLM_MODEL=<modelo>`.
+
+### Scheduler (Beta)
+
+`kaos schedule` corre `kaos run` periódicamente. Como `run` es idempotente
+(publica solo si algún hilo cambió), correrlo de forma programada sobre foros sin
+cambios no genera publicaciones nuevas:
+
+```bash
+kaos schedule --consolidated                 # cada KAOS_SCHEDULER_INTERVAL s (default 900), Ctrl-C para detener
+kaos schedule --interval 300 --consolidated  # cada 5 min
+kaos schedule --once --consolidated          # una sola pasada (para un cron externo)
 ```
 
 ### Pruebas

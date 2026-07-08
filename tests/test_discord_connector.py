@@ -51,6 +51,32 @@ def test_connector_publishes_message_events() -> None:
     assert source.closed is True
 
 
+def test_event_payload_includes_timestamp_when_present() -> None:
+    bus = InMemoryEventBus()
+    seen: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        seen.append(event)
+
+    dated = DiscordMessage(
+        message_id="1",
+        channel_id="100",
+        guild_id="42",
+        author="ana",
+        text="hola",
+        timestamp="2026-07-08T14:30:00+00:00",
+    )
+    connector = DiscordConnector(StaticDiscordSource([dated]))
+
+    async def scenario() -> None:
+        bus.subscribe("*", handler)
+        await connector.start(bus)
+
+    asyncio.run(scenario())
+
+    assert seen[0].payload["timestamp"] == "2026-07-08T14:30:00+00:00"
+
+
 class _CollectingPublisher:
     name = "collecting-publisher"
 

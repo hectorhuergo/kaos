@@ -35,12 +35,14 @@ class DiscordGatewaySource:
     def to_discord_message(message: Any) -> DiscordMessage:
         """Map a discord.py Message (or a duck-typed equivalent) to our model."""
         guild = getattr(message, "guild", None)
+        created = getattr(message, "created_at", None)
         return DiscordMessage(
             message_id=str(message.id),
             channel_id=str(message.channel.id),
             guild_id=str(guild.id) if guild is not None else "dm",
             author=str(message.author),
             text=message.content,
+            timestamp=created.isoformat() if created is not None else None,
         )
 
     def _accepts(self, message: Any) -> bool:

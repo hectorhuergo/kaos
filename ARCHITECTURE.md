@@ -45,9 +45,31 @@ datos (ver `docs/adr/ADR-0008.md`).
   `workspace` (motor de contexto mínimo) para que los agentes de nivel
   conversación reciban la conversación completa; el evento
   `conversation.completed` actúa como disparador.
+- `Scheduler` — lazo agnóstico del Core que corre un job async idempotente en un
+  intervalo fijo, con el tiempo inyectable (testeable sin esperas reales).
+  `kaos schedule` lo usa para disparar `kaos run` periódicamente; como `run`
+  publica solo si algo cambió, las corridas sobre fuentes sin cambios no generan
+  publicaciones nuevas (ver `docs/adr/ADR-0009.md`).
 
 Estas implementaciones son intercambiables (p. ej. bus sobre Redis, storage
 sobre PostgreSQL/MinIO) sin tocar Connectors, Agents ni Publishers.
+
+## Core
+
+`src/kaos/core/` es el núcleo agnóstico (sin dependencias de proveedores):
+
+- `config.py` — `Settings` cargadas del entorno (`.env`); pura data, sin importar
+  plugins. La composición vive en `src/kaos/bootstrap/factory.py`.
+- `providers.py` — **catálogo descriptivo** de proveedores LLM (modelo por
+  defecto, endpoint, credencial requerida), sincronizado con `LLM_PROVIDERS`.
+  `kaos providers` lo lista, marca el activo e indica si tiene credencial (nunca
+  imprime secretos). Ver `docs/adr/ADR-0009.md`.
+- `cache.py` — **cache de resúmenes** *read-through* sobre `Storage`, indexada por
+  hilo + huella de contenido + modelo: una conversación sin cambios no vuelve a
+  consultar al LLM. Persiste entre corridas con `PostgresStorage`
+  (`docs/adr/ADR-0007.md`).
+- `redaction.py` — redacción de secretos (seed phrases, claves privadas, tokens)
+  antes de que un texto llegue al LLM o se publique como Artifact.
 
 ## Agents
 
@@ -56,17 +78,26 @@ Los agentes viven en `src/kaos/plugins/agents/` y dependen solo de contratos:
 - **Resume Agent** — consume los eventos de mensajes de una conversación y
   produce un `Artifact` (`conversation.summary`) con un resumen ejecutivo en
   Markdown. Usa el contrato `LLMProvider`, por lo que es agnóstico del proveedor
-  de IA; el `EchoLLMProvider` del SDK permite probarlo sin proveedor externo.
+  de IA; el `EchoLLMProvider` del SDK permite probarlo sin proveedor externo. El
+  transcript que recibe el LLM prefija cada línea con la fecha/hora del mensaje
+  (ISO-8601) cuando el evento la trae, de modo que el resumen referencia fechas
+  reales en vez de inventarlas.
 
 ## LLM Providers
 
 `src/kaos/plugins/providers/` contiene implementaciones de `LLMProvider`. El
 `OpenAICompatibleLLMProvider` habla con cualquier endpoint OpenAI-compatible
-(OpenAI, Azure, **GitHub Models**, Ollama, ...). Para usar GitHub como backend:
+(OpenAI, Azure, **GitHub Models**, Anthropic, Ollama, ...). Para usar GitHub como
+backend:
 
 ```python
 from kaos.plugins.providers import OpenAICompatibleLLMProvider
 
 llm = OpenAICompatibleLLMProvider.github_models(token=os.environ["GITHUB_TOKEN"])
 ```
+
+El catálogo de proveedores (`src/kaos/core/providers.py`) describe las opciones
+disponibles y `kaos providers` reporta cuál está activo y si tiene credencial.
+La selección concreta la resuelve la composición root según `KAOS_LLM_PROVIDER`
+(ver `docs/adr/ADR-0005.md` y `docs/adr/ADR-0009.md`).
 

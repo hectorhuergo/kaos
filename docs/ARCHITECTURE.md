@@ -21,18 +21,26 @@ KAOS (Knowledge Analysis & Orchestration System) is an event-driven platform tha
 - AI Provider Agnostic
 - Structured Knowledge
 - Immutable Evidence
+- Everything is Traceable
+- Knowledge before Reports
 
 ## Runtime Flow
 
 Connector → Event → Context Builder → Agent Pipeline → Artifacts → Publishers → Knowledge Store
 
-## Initial Components
+## Components
 
 - Bootstrap
-- CLI
-- Runtime
-- Plugin Registry
+- CLI (`kaos ...`)
+- Runtime (EventBus, KaosRuntime, Scheduler)
+- Plugin Registry / Composition Root
 - EventBus
-- Artifact Store
-- Console Publisher
-- Discord Connector (planned)
+- Artifact Store (in-memory / PostgreSQL)
+- Summary Cache (knowledge reuse)
+- Console / Discord Publishers
+- Discord Connector (live gateway + REST backfill)
+- LLM Providers (OpenAI-compatible: OpenAI, GitHub Models, Anthropic, …)
+
+> The canonical, up-to-date architecture document is the top-level
+> [`ARCHITECTURE.md`](../ARCHITECTURE.md). This file keeps the high-level vision;
+> see the ADRs in [`adr/`](adr/) for the detailed decisions.

@@ -16,3 +16,13 @@
 - [x] Persistencia real (PostgreSQL) + cache de resúmenes (reutiliza conocimiento)
 - [x] Suscripciones persistidas (`kaos subscribe` / `kaos run`)
 
+## Beta — progreso
+- [x] Configuración de providers (`kaos providers`, catálogo agnóstico)
+- [x] Scheduler (`kaos schedule`, corre `kaos run` idempotente en intervalo)
+- [ ] Knowledge Graph
+- [ ] Dashboard
+- [ ] GitHub Connector
+- [ ] Odoo Connector
+- [ ] Multi-workspace
+
+

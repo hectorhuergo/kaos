@@ -1,6 +1,28 @@
 # Changelog
 
 ## Unreleased
+- Docs: aligned `ARCHITECTURE.md` (Core section: provider catalog, summary cache,
+  redaction; Scheduler in Runtime; timestamp-aware transcripts), refreshed the
+  `docs/` stubs (`ARCHITECTURE.md`, `ROADMAP.md`) and expanded `CONTRIBUTING.md`
+  (semantic commits, quality gates, Definition of Done). README `.env` table gains
+  `KAOS_LLM_TIMEOUT` and `KAOS_SCHEDULER_INTERVAL`.
+- Resume Agent: timestamp-aware transcripts. Discord message timestamps
+  (ISO-8601) are threaded from the source (backfill + gateway) into the event
+  payload and prefixed on each transcript line, so the summary references real
+  dates instead of inventing them; the system prompt instructs the model to use
+  those marks and not fabricate dates.
+- Provider catalog (`src/kaos/core/providers.py`): descriptive, Core-agnostic
+  metadata for every LLM provider (default model, endpoint, required credential)
+  kept in sync with `config.LLM_PROVIDERS`. CLI `kaos providers` lists them and
+  marks the active one and whether its credential is present (secrets never
+  printed).
+- Scheduler (Beta): `Scheduler` (`src/kaos/runtime/scheduler.py`) runs an
+  idempotent async job on a fixed interval with injectable time (fully testable).
+  CLI `kaos schedule [--interval N] [--once] [--dry-run] [--consolidated]
+  [--force]` wraps `kaos run` so KAOS keeps its published knowledge up to date;
+  because `run` publishes only on change, scheduled runs over unchanged forums
+  are no-ops. Interval via `KAOS_SCHEDULER_INTERVAL` (default 900s).
+- ADR-0009 — Scheduler & Provider Catalog.
 - Kernel: public contracts in `src/kaos/contracts/` (Event, Context, Artifact,
   Agent, Connector, Publisher, Storage, LLMProvider, EventBus, Runtime).
 - Runtime: concrete `KaosRuntime`, `InMemoryEventBus` and `InMemoryStorage` in

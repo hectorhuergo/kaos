@@ -118,6 +118,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0006 — Configuration & Composition Root
 - ADR-0007 — Summary Cache & Knowledge Reuse
 - ADR-0008 — Subscriptions & Persistent Configuration
+- ADR-0009 — Scheduler & Provider Catalog
 
 ### RFC
 

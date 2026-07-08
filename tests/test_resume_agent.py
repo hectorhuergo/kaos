@@ -68,6 +68,25 @@ def test_run_builds_transcript_prompt() -> None:
     assert llm.calls[0][0].role == "system"
 
 
+def test_transcript_prefixes_timestamp_when_present() -> None:
+    llm = EchoLLMProvider()  # echoes the transcript back as the "summary"
+    agent = ResumeAgent(llm)
+    dated = Event(
+        type="message.created",
+        source="discord",
+        workspace="w1",
+        payload={"author": "ana", "text": "hola", "timestamp": "2026-07-08T14:30:00+00:00"},
+    )
+    context = Context(workspace="w1", events=(dated, _message("juan", "listo"), _completed()))
+
+    artifacts = asyncio.run(agent.run(context))
+
+    # Dated line carries its ISO timestamp; the undated line stays minimal.
+    assert artifacts[0].content["summary"] == (
+        "[2026-07-08T14:30:00+00:00] ana: hola\njuan: listo"
+    )
+
+
 def test_secrets_are_redacted_before_llm_and_artifact() -> None:
     secret = "sk-abcdefghijklmnopqrstuvwxyz012345"
     llm = EchoLLMProvider()  # echoes the transcript back as the "summary"

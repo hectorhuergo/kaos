@@ -14,13 +14,16 @@ from kaos.runtime import InMemoryEventBus, InMemoryStorage, KaosRuntime
 from kaos.sdk import EchoLLMProvider
 
 
-def _msg(mid: str, text: str, *, bot: bool = False, name: str = "ana") -> dict:
-    return {
+def _msg(mid: str, text: str, *, bot: bool = False, name: str = "ana", ts: str | None = None) -> dict:
+    raw = {
         "id": mid,
         "channel_id": "1416219205216374795",
         "author": {"username": name, "global_name": name, "bot": bot},
         "content": text,
     }
+    if ts is not None:
+        raw["timestamp"] = ts
+    return raw
 
 
 def _client(handler) -> httpx.AsyncClient:
@@ -54,6 +57,23 @@ def test_backfill_reads_in_chronological_order_and_filters_bots() -> None:
     texts = asyncio.run(collect())
     # Chronological (oldest first) and the bot message filtered out.
     assert texts == ["primero", "tercero"]
+
+
+def test_backfill_maps_message_timestamp() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[_msg("1", "hola", ts="2026-07-08T14:30:00+00:00")])
+
+    source = DiscordBackfillSource(
+        token="tkn", channel_id="c", guild_id="42", client=_client(handler)
+    )
+
+    async def first() -> str | None:
+        async for m in source.messages():
+            await source.close()
+            return m.timestamp
+        return None
+
+    assert asyncio.run(first()) == "2026-07-08T14:30:00+00:00"
 
 
 def test_backfill_paginates_with_before() -> None:

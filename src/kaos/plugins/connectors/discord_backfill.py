@@ -131,6 +131,7 @@ class DiscordBackfillSource:
             guild_id=self._guild_id or "backfill",
             author=str(name),
             text=raw.get("content", ""),
+            timestamp=raw.get("timestamp"),
         )
 
     async def close(self) -> None:

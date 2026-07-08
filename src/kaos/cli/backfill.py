@@ -156,6 +156,7 @@ async def run_forum_backfill(
                                 "text": m.text,
                                 "channel_id": m.channel_id,
                                 "message_id": m.message_id,
+                                **({"timestamp": m.timestamp} if m.timestamp else {}),
                             },
                         )
                         async for m in source.messages()

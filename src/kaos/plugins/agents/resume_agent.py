@@ -27,7 +27,10 @@ SYSTEM_PROMPT = (
     "## Riesgos\n"
     "## Próximos pasos\n"
     "Sé conciso, usa viñetas y no inventes información que no esté en la "
-    "conversación."
+    "conversación. Cada mensaje puede venir prefijado con su fecha y hora en "
+    "formato ISO-8601 entre corchetes (p. ej. [2026-07-08T14:30:00+00:00]); "
+    "usa esas marcas para calcular correctamente las fechas y horas de los "
+    "eventos al incluirlas en el resumen, y no inventes fechas si no están."
 )
 
 
@@ -96,14 +99,18 @@ class ResumeAgent:
     def _render(events: Sequence[Event]) -> str:
         """Render the conversation as a plain transcript for the LLM.
 
-        Secrets are redacted here so they never leave KAOS towards the LLM
-        provider (Immutable Evidence keeps the raw event; only the derived
-        transcript is scrubbed).
+        Each line is prefixed with the message timestamp (ISO-8601) when the
+        event carries one, so the model can reference real dates instead of
+        inventing them. Secrets are redacted here so they never leave KAOS
+        towards the LLM provider (Immutable Evidence keeps the raw event; only
+        the derived transcript is scrubbed).
         """
         lines = []
         for event in events:
             author = event.payload.get("author", "unknown")
             text = event.payload.get("text", "")
-            lines.append(f"{author}: {text}")
+            timestamp = event.payload.get("timestamp")
+            prefix = f"[{timestamp}] " if timestamp else ""
+            lines.append(f"{prefix}{author}: {text}")
         return redact_secrets("\n".join(lines))
 

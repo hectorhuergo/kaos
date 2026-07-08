@@ -66,6 +66,24 @@ def main() -> int:
         help="ignore the summary cache and re-summarize everything",
     )
 
+    sub.add_parser("providers", help="list LLM providers and their readiness")
+
+    sc_p = sub.add_parser("schedule", help="run subscriptions periodically (idempotent)")
+    sc_p.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="seconds between runs (default KAOS_SCHEDULER_INTERVAL or 900)",
+    )
+    sc_p.add_argument("--once", action="store_true", help="run a single pass and exit (for external cron)")
+    sc_p.add_argument("--dry-run", action="store_true", help="print to console instead of publishing")
+    sc_p.add_argument(
+        "--consolidated",
+        action="store_true",
+        help="merge each forum's thread summaries into a single report",
+    )
+    sc_p.add_argument("--force", action="store_true", help="ignore the summary cache")
+
     a = p.parse_args()
     if a.cmd == "doctor":
         print("Environment OK (alpha)")
@@ -146,6 +164,24 @@ def main() -> int:
         return asyncio.run(
             run_subscriptions(
                 dry_run=a.dry_run, consolidated=a.consolidated, force=a.force
+            )
+        )
+    elif a.cmd == "providers":
+        from kaos.cli.providers import list_providers
+
+        return list_providers()
+    elif a.cmd == "schedule":
+        import asyncio
+
+        from kaos.cli.schedule import run_scheduler
+
+        return asyncio.run(
+            run_scheduler(
+                interval=a.interval,
+                once=a.once,
+                dry_run=a.dry_run,
+                consolidated=a.consolidated,
+                force=a.force,
             )
         )
     elif a.cmd:

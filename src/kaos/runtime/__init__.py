@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from kaos.runtime.event_bus import WILDCARD, InMemoryEventBus
 from kaos.runtime.runtime import KaosRuntime
+from kaos.runtime.scheduler import Scheduler
 from kaos.runtime.storage import InMemoryStorage
 from kaos.runtime.subscriptions import InMemorySubscriptionStore
 
@@ -17,5 +18,6 @@ __all__ = [
     "InMemoryStorage",
     "InMemorySubscriptionStore",
     "KaosRuntime",
+    "Scheduler",
 ]
 

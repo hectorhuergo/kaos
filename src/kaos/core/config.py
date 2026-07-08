@@ -69,6 +69,9 @@ class Settings(BaseModel):
     # Persistence
     database_url: str | None = None
 
+    # Scheduler (Beta): seconds between recurring `kaos run` passes.
+    scheduler_interval: float = 900.0
+
     @field_validator("llm_provider")
     @classmethod
     def _valid_provider(cls, value: str) -> str:
@@ -106,6 +109,12 @@ class Settings(BaseModel):
         except ValueError:
             llm_timeout = 120.0
 
+        interval_raw = get("KAOS_SCHEDULER_INTERVAL")
+        try:
+            scheduler_interval = float(interval_raw) if interval_raw else 900.0
+        except ValueError:
+            scheduler_interval = 900.0
+
         return cls(
             llm_provider=get("KAOS_LLM_PROVIDER") or "echo",
             llm_model=get("KAOS_LLM_MODEL") or "gpt-4o-mini",
@@ -123,5 +132,6 @@ class Settings(BaseModel):
             discord_backfill_channel_id=get("KAOS_DISCORD_BACKFILL_CHANNEL_ID"),
             discord_message_limit=message_limit,
             database_url=get("KAOS_DATABASE_URL"),
+            scheduler_interval=scheduler_interval,
         )
 
