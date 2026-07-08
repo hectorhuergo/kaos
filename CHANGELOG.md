@@ -19,6 +19,12 @@
 - CLI: `kaos up` runs a demo pipeline (Discord -> ResumeAgent -> Console).
 - LLM: `OpenAICompatibleLLMProvider` (`src/kaos/plugins/providers/`) targeting
   any OpenAI-compatible endpoint, incl. GitHub Models (`github_models` factory).
+- LLM: Claude support via the `anthropic` provider (Anthropic's OpenAI-compatible
+  endpoint); `KAOS_LLM_PROVIDER=anthropic` + `KAOS_ANTHROPIC_API_KEY`, default
+  model `claude-3-5-haiku-latest`.
+- LLM: configurable request timeout (`KAOS_LLM_TIMEOUT`, default 120s) so slow
+  reasoning models (e.g. gpt-5 via GitHub Models) don't hit the previous 30s
+  `ReadTimeout`.
 - Console Publisher (`src/kaos/plugins/publishers/`).
 - Configuration: `Settings.from_env()` (`src/kaos/core/config.py`) and a
   composition root `build_runtime()` (`src/kaos/bootstrap/factory.py`); `kaos up`
@@ -44,6 +50,10 @@
   stored summary when a conversation hasn't changed (no LLM call) and persists
   evidence + summary otherwise; `--force` recomputes every thread. Durable across
   runs with `PostgresStorage`.
+- Summary cache is model-aware: the LLM model is part of the cache identity
+  (`model` metadata), so switching models (e.g. gpt-4o-mini -> gpt-5) recomputes
+  instead of reusing another model's summary, keeping knowledge model-specific.
+  `backfill-forum` prints per-thread progress (`· <thread>: resumiendo con <model>…`).
 - Subscriptions: `Subscription` domain entity (`src/kaos/domain/`) and
   `SubscriptionStore` contract, with in-memory and PostgreSQL
   (`kaos_subscriptions`) backends. Config split: secrets stay in the environment,

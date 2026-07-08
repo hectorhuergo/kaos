@@ -106,11 +106,12 @@ corre un demo offline (conversación estática + salida por consola).
 
 | Variable | Descripción |
 |----------|-------------|
-| `KAOS_LLM_PROVIDER` | `echo` (default), `openai` o `github` |
-| `KAOS_LLM_MODEL` | Modelo, p. ej. `gpt-4o-mini` |
+| `KAOS_LLM_PROVIDER` | `echo` (default), `openai`, `github` o `anthropic` |
+| `KAOS_LLM_MODEL` | Modelo, p. ej. `gpt-4o-mini` o `claude-3-5-haiku-latest` |
 | `KAOS_LLM_API_KEY` | API key para `openai` |
 | `KAOS_LLM_BASE_URL` | Endpoint OpenAI-compatible (OpenAI, Azure, Ollama…) |
 | `KAOS_GITHUB_TOKEN` / `GITHUB_TOKEN` | Token para GitHub Models (`github`) |
+| `KAOS_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | API key para Claude (`anthropic`) |
 | `KAOS_DISCORD_TOKEN` | Token del bot; si está, usa Discord real |
 | `KAOS_DISCORD_GUILD_ID` | Guild a observar (workspace) |
 | `KAOS_DISCORD_CHANNEL_IDS` | IDs de canales separados por coma (vacío = todos) |

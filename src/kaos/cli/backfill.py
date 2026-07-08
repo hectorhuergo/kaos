@@ -14,6 +14,7 @@ from kaos.contracts.context import Context
 from kaos.contracts.event import Event
 from kaos.core.cache import (
     CONTENT_HASH,
+    MODEL,
     THREAD_ID,
     SummaryCache,
     content_fingerprint,
@@ -123,6 +124,7 @@ async def run_forum_backfill(
     cache = SummaryCache(storage)
     workspace = f"discord:{forum_channel_id}"
     msg_limit = limit if limit is not None else settings.discord_message_limit
+    model = settings.llm_model
 
     # Collected per-thread summaries for the consolidated report.
     summaries: list[tuple[str, str, Artifact]] = []
@@ -179,13 +181,14 @@ async def run_forum_backfill(
 
                 base: Artifact | None = None
                 if not force:
-                    cached = await cache.get(workspace, thread_id, fingerprint)
+                    cached = await cache.get(workspace, thread_id, fingerprint, model)
                     if cached is not None:
                         print(f"· {name}: sin cambios — reutilizando resumen cacheado")
                         base = cached
 
                 thread_changed = base is None
                 if base is None:
+                    print(f"· {name}: resumiendo con {model}…", flush=True)
                     try:
                         artifacts = await agent.run(
                             Context(workspace=workspace, events=tuple(events))
@@ -214,6 +217,7 @@ async def run_forum_backfill(
                             **artifacts[0].metadata,
                             THREAD_ID: thread_id,
                             CONTENT_HASH: fingerprint,
+                            MODEL: model,
                             "thread_name": name,
                         },
                     )

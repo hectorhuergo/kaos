@@ -22,6 +22,8 @@ from kaos.contracts.llm import Message
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 GITHUB_MODELS_BASE_URL = "https://models.inference.ai.azure.com"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest"
 _RATE_LIMITED = 429
 _MAX_WAIT_SECONDS = 65.0
 
@@ -56,14 +58,44 @@ class OpenAICompatibleLLMProvider:
         model: str = "gpt-4o-mini",
         *,
         client: httpx.AsyncClient | None = None,
+        timeout: float = 120.0,
     ) -> OpenAICompatibleLLMProvider:
-        """Build a provider pointing at GitHub Models (auth via a GitHub token)."""
+        """Build a provider pointing at GitHub Models (auth via a GitHub token).
+
+        The default timeout is generous because reasoning models (e.g. gpt-5)
+        can take well over 30s to respond.
+        """
         return cls(
             model=model,
             api_key=token,
             base_url=GITHUB_MODELS_BASE_URL,
             name="github-models",
             client=client,
+            timeout=timeout,
+        )
+
+    @classmethod
+    def anthropic(
+        cls,
+        api_key: str,
+        model: str = DEFAULT_ANTHROPIC_MODEL,
+        *,
+        client: httpx.AsyncClient | None = None,
+        timeout: float = 120.0,
+    ) -> OpenAICompatibleLLMProvider:
+        """Build a provider for Claude via Anthropic's OpenAI-compatible endpoint.
+
+        Anthropic exposes an OpenAI-compatible ``/chat/completions`` API, so
+        Claude models (e.g. ``claude-3-5-haiku-latest``) work through the same
+        contract without a dedicated client.
+        """
+        return cls(
+            model=model,
+            api_key=api_key,
+            base_url=ANTHROPIC_BASE_URL,
+            name="anthropic",
+            client=client,
+            timeout=timeout,
         )
 
     @property

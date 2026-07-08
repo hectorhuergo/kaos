@@ -7,6 +7,7 @@ import asyncio
 from kaos.contracts.artifact import Artifact
 from kaos.core.cache import (
     CONTENT_HASH,
+    MODEL,
     THREAD_ID,
     SummaryCache,
     content_fingerprint,
@@ -76,4 +77,39 @@ def test_cache_ignores_non_summary_artifacts() -> None:
     cache = SummaryCache(storage)
 
     assert asyncio.run(cache.get("w1", "t1", fp)) is None
+
+
+def _summary_with_model(workspace: str, thread_id: str, fp: str, model: str) -> Artifact:
+    return Artifact(
+        kind="conversation.summary",
+        workspace=workspace,
+        produced_by="resume-agent",
+        content={"summary": "# ok"},
+        metadata={THREAD_ID: thread_id, CONTENT_HASH: fp, MODEL: model},
+    )
+
+
+def test_cache_miss_when_model_differs() -> None:
+    storage = InMemoryStorage()
+    fp = content_fingerprint(["1", "2"])
+    asyncio.run(storage.save_artifact(_summary_with_model("w1", "t1", fp, "gpt-4o-mini")))
+    cache = SummaryCache(storage)
+
+    # Same content, different model -> miss (knowledge is model-specific).
+    assert asyncio.run(cache.get("w1", "t1", fp, "gpt-5")) is None
+    # Same model -> hit.
+    hit = asyncio.run(cache.get("w1", "t1", fp, "gpt-4o-mini"))
+    assert hit is not None
+    assert hit.metadata[MODEL] == "gpt-4o-mini"
+
+
+def test_cache_model_none_matches_any() -> None:
+    storage = InMemoryStorage()
+    fp = content_fingerprint(["1"])
+    asyncio.run(storage.save_artifact(_summary_with_model("w1", "t1", fp, "gpt-5")))
+    cache = SummaryCache(storage)
+
+    # Backward compatible: without a model filter, any stored summary matches.
+    assert asyncio.run(cache.get("w1", "t1", fp)) is not None
+
 

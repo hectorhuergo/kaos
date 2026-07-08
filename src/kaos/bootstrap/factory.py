@@ -24,7 +24,7 @@ from kaos.plugins.publishers import (
     DiscordRestPoster,
     DiscordWebhookPublisher,
 )
-from kaos.plugins.providers import OPENAI_BASE_URL, OpenAICompatibleLLMProvider
+from kaos.plugins.providers import OPENAI_BASE_URL, DEFAULT_ANTHROPIC_MODEL, OpenAICompatibleLLMProvider
 from kaos.runtime import InMemoryStorage, KaosRuntime
 from kaos.runtime import InMemorySubscriptionStore
 from kaos.runtime.demo import SAMPLE_CONVERSATION, SAMPLE_SUMMARY
@@ -61,7 +61,20 @@ def build_llm(settings: Settings) -> LLMProvider:
             raise ValueError(
                 "KAOS_GITHUB_TOKEN is required for the 'github' LLM provider"
             )
-        return OpenAICompatibleLLMProvider.github_models(token=token, model=settings.llm_model)
+        return OpenAICompatibleLLMProvider.github_models(
+            token=token, model=settings.llm_model, timeout=settings.llm_timeout
+        )
+    if settings.llm_provider == "anthropic":
+        key = settings.anthropic_api_key or settings.llm_api_key
+        if not key:
+            raise ValueError(
+                "KAOS_ANTHROPIC_API_KEY is required for the 'anthropic' LLM provider"
+            )
+        # Honour a Claude model if set; otherwise default to Haiku.
+        model = settings.llm_model if "claude" in settings.llm_model else DEFAULT_ANTHROPIC_MODEL
+        return OpenAICompatibleLLMProvider.anthropic(
+            api_key=key, model=model, timeout=settings.llm_timeout
+        )
     if settings.llm_provider == "openai":
         if not settings.llm_api_key:
             raise ValueError(
@@ -71,6 +84,7 @@ def build_llm(settings: Settings) -> LLMProvider:
             model=settings.llm_model,
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url or OPENAI_BASE_URL,
+            timeout=settings.llm_timeout,
         )
     return EchoLLMProvider(response=SAMPLE_SUMMARY)
 

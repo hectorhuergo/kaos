@@ -21,6 +21,7 @@ from kaos.contracts.storage import Storage
 # Metadata keys used to identify a cached summary.
 THREAD_ID = "thread_id"
 CONTENT_HASH = "content_hash"
+MODEL = "model"
 
 SUMMARY_KIND = "conversation.summary"
 
@@ -42,18 +43,28 @@ class SummaryCache:
         self._storage = storage
 
     async def get(
-        self, workspace: str, thread_id: str, fingerprint: str
+        self,
+        workspace: str,
+        thread_id: str,
+        fingerprint: str,
+        model: str | None = None,
     ) -> Artifact | None:
         """Return a cached summary for a conversation, or ``None`` on a miss.
 
         A hit requires the same workspace, thread and content fingerprint, so a
-        changed conversation is treated as a miss (and gets re-summarized).
+        changed conversation is treated as a miss (and gets re-summarized). When
+        ``model`` is given it must also match: knowledge produced by a different
+        LLM is distinct, so switching models recomputes rather than reusing a
+        summary written by another model.
         """
         for artifact in await self._storage.list_artifacts(workspace):
             if artifact.kind != SUMMARY_KIND:
                 continue
             meta = artifact.metadata
-            if meta.get(THREAD_ID) == thread_id and meta.get(CONTENT_HASH) == fingerprint:
-                return artifact
+            if meta.get(THREAD_ID) != thread_id or meta.get(CONTENT_HASH) != fingerprint:
+                continue
+            if model is not None and meta.get(MODEL) != model:
+                continue
+            return artifact
         return None
 

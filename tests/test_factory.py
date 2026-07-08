@@ -7,7 +7,12 @@ import io
 
 from kaos.bootstrap.factory import build_llm, build_runtime
 from kaos.core.config import Settings
-from kaos.plugins.providers import GITHUB_MODELS_BASE_URL, OpenAICompatibleLLMProvider
+from kaos.plugins.providers import (
+    ANTHROPIC_BASE_URL,
+    DEFAULT_ANTHROPIC_MODEL,
+    GITHUB_MODELS_BASE_URL,
+    OpenAICompatibleLLMProvider,
+)
 from kaos.plugins.publishers import ConsolePublisher
 from kaos.runtime import InMemoryStorage
 from kaos.sdk import EchoLLMProvider
@@ -23,6 +28,30 @@ def test_build_llm_github() -> None:
     assert isinstance(llm, OpenAICompatibleLLMProvider)
     assert llm.name == "github-models"
     assert llm._base_url == GITHUB_MODELS_BASE_URL  # type: ignore[attr-defined]
+
+
+def test_build_llm_anthropic_defaults_to_haiku() -> None:
+    settings = Settings.from_env(
+        {"KAOS_LLM_PROVIDER": "anthropic", "KAOS_ANTHROPIC_API_KEY": "k"}
+    )
+    llm = build_llm(settings)
+    assert isinstance(llm, OpenAICompatibleLLMProvider)
+    assert llm.name == "anthropic"
+    assert llm._base_url == ANTHROPIC_BASE_URL  # type: ignore[attr-defined]
+    # No claude model set -> defaults to Haiku.
+    assert llm._model == DEFAULT_ANTHROPIC_MODEL  # type: ignore[attr-defined]
+
+
+def test_build_llm_anthropic_honours_claude_model() -> None:
+    settings = Settings.from_env(
+        {
+            "KAOS_LLM_PROVIDER": "anthropic",
+            "KAOS_ANTHROPIC_API_KEY": "k",
+            "KAOS_LLM_MODEL": "claude-3-5-sonnet-latest",
+        }
+    )
+    llm = build_llm(settings)
+    assert llm._model == "claude-3-5-sonnet-latest"  # type: ignore[attr-defined]
 
 
 def test_build_llm_openai_uses_base_url() -> None:

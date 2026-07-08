@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 
-LLM_PROVIDERS = ("echo", "openai", "github")
+LLM_PROVIDERS = ("echo", "openai", "github", "anthropic")
 
 
 def load_dotenv(path: str | Path = ".env", *, override: bool = False) -> None:
@@ -50,7 +50,9 @@ class Settings(BaseModel):
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str | None = None
     llm_base_url: str | None = None
+    llm_timeout: float = 120.0
     github_token: str | None = None
+    anthropic_api_key: str | None = None
 
     # Discord
     discord_token: str | None = None
@@ -98,12 +100,20 @@ class Settings(BaseModel):
         limit_raw = get("KAOS_DISCORD_MESSAGE_LIMIT")
         message_limit = int(limit_raw) if limit_raw and limit_raw.isdigit() else 100
 
+        timeout_raw = get("KAOS_LLM_TIMEOUT")
+        try:
+            llm_timeout = float(timeout_raw) if timeout_raw else 120.0
+        except ValueError:
+            llm_timeout = 120.0
+
         return cls(
             llm_provider=get("KAOS_LLM_PROVIDER") or "echo",
             llm_model=get("KAOS_LLM_MODEL") or "gpt-4o-mini",
             llm_api_key=get("KAOS_LLM_API_KEY"),
             llm_base_url=get("KAOS_LLM_BASE_URL"),
+            llm_timeout=llm_timeout,
             github_token=get("KAOS_GITHUB_TOKEN") or get("GITHUB_TOKEN"),
+            anthropic_api_key=get("KAOS_ANTHROPIC_API_KEY") or get("ANTHROPIC_API_KEY"),
             discord_token=get("KAOS_DISCORD_TOKEN"),
             discord_guild_id=get("KAOS_DISCORD_GUILD_ID"),
             discord_channel_ids=channels,
