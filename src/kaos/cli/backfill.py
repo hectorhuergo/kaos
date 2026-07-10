@@ -6,6 +6,8 @@ summary is printed to the console instead of published.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import httpx
 
 from kaos.bootstrap.factory import build_llm, build_publisher, build_storage, load_settings
@@ -298,7 +300,7 @@ def _build_consolidated_report(
         f"_Consolidado de {len(summaries)} hilos · generado por KAOS_\n"
     )
     sections = [header]
-    all_source_events: list[str] = []
+    all_source_events: list[UUID] = []
     total_messages = 0
     for _thread_id, name, base in summaries:
         body = base.content.get("summary", "")

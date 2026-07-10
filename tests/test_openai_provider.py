@@ -7,11 +7,11 @@ import json
 
 import httpx
 
+from kaos.contracts import Context, Event
 from kaos.contracts.llm import Message
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.agents.resume_agent import CONVERSATION_COMPLETED
 from kaos.plugins.providers import GITHUB_MODELS_BASE_URL, OpenAICompatibleLLMProvider
-from kaos.contracts import Context, Event
 
 
 def _mock_client(handler) -> httpx.AsyncClient:

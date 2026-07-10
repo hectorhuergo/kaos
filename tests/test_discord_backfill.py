@@ -6,11 +6,10 @@ import asyncio
 
 import httpx
 
-from kaos.contracts import Artifact, Context
+from kaos.contracts import Artifact
 from kaos.plugins.agents import ResumeAgent
-from kaos.plugins.agents.resume_agent import CONVERSATION_COMPLETED
 from kaos.plugins.connectors import DiscordBackfillSource, DiscordConnector
-from kaos.runtime import InMemoryEventBus, InMemoryStorage, KaosRuntime
+from kaos.runtime import InMemoryStorage, KaosRuntime
 from kaos.sdk import EchoLLMProvider
 
 

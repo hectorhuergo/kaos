@@ -250,7 +250,7 @@ class PostgresSubscriptionStore:
             channel_id,
         )
         # asyncpg returns a status like "UPDATE 1".
-        return result.rsplit(" ", 1)[-1] != "0"
+        return bool(result.rsplit(" ", 1)[-1] != "0")
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -381,7 +381,7 @@ class PostgresCredentialStore:
             "DELETE FROM kaos_provider_credentials WHERE provider = $1", provider
         )
         # asyncpg returns a status like "DELETE 1".
-        return result.rsplit(" ", 1)[-1] != "0"
+        return bool(result.rsplit(" ", 1)[-1] != "0")
 
     async def list(self) -> list[ProviderCredential]:
         pool = await self._ensure_pool()

@@ -123,6 +123,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0011 — Live Dashboard (FastAPI)
 - ADR-0012 — GitHub Connector
 - ADR-0013 — Web Console & Persisted Runtime Config
+- ADR-0014 — Dev Agent & Tool-Using Agents
 
 ### RFC
 

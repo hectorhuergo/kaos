@@ -13,9 +13,8 @@ and knows nothing about Discord, the LLM or Storage. Time is injectable
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-
 import asyncio
+from collections.abc import Awaitable, Callable
 
 Job = Callable[[], Awaitable[int]]
 Sleep = Callable[[float], Awaitable[None]]

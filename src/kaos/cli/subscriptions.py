@@ -108,7 +108,11 @@ async def run_subscriptions(
     for sub in subscriptions:
         # Publish to this subscription's resume thread, if it has one.
         sub_settings = settings.model_copy(
-            update={"discord_resume_thread_id": sub.resume_thread_id or settings.discord_resume_thread_id}
+            update={
+                "discord_resume_thread_id": (
+                    sub.resume_thread_id or settings.discord_resume_thread_id
+                )
+            }
         )
         print(f"=== {sub.kind} {sub.channel_id} ===")
         if sub.kind == FORUM:

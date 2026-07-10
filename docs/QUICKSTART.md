@@ -154,7 +154,24 @@ Dashboard vivo en `http://127.0.0.1:8000` (rutas: `/`, `/api/knowledge`,
   secretos (API keys/tokens) siguen en `.env`; la consola solo muestra si el
   provider tiene credencial (readiness), nunca el valor.
 - **Subscriptions**: alta y baja de foros/canales vigilados.
+- **Vista previa**: genera el resumen de una suscripción o un repo de GitHub y lo
+  muestra sin publicar en Discord (dry-run).
 - **Dashboards**: enlaces al dashboard vivo de cada workspace.
+
+## 5b. Dev Agent (teammate local con herramientas)
+
+El Dev Agent trabaja sobre el repo con una caja de herramientas confinada
+(leer/listar/buscar archivos, correr comandos permitidos como `pytest`/`ruff`) y
+produce una sesión trazable (`dev.session`) en el knowledge base.
+
+```bash
+kaos dev "Revisá src/kaos/core/cache.py y sugerí mejoras" --dry-run
+kaos dev "¿Dónde se registra el connector de GitHub?" --max-steps 6
+```
+
+Corre 100% local con Ollama. Para uso real conviene un modelo instruible más
+capaz (p. ej. `qwen2.5:7b`) —los modelos muy chicos siguen el protocolo de
+herramientas de forma poco fiable—; cambiás el modelo desde la consola web.
 
 ## 6. Crear un plugin (dogfooding)
 

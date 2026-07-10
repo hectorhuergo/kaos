@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- Dev Agent (first active teammate): a tool-using agent (ADR-0014) that works on
+  the local repo. New `Tool` contract (`src/kaos/contracts/tool.py`) and a
+  confined dev toolbox (`src/kaos/plugins/tools/dev_tools.py`): `ReadFileTool`,
+  `ListDirTool`, `SearchCodeTool`, `RunCommandTool` — paths confined to the repo
+  root and commands restricted to a read-only allowlist (pytest, ruff, mypy,
+  git status|diff|log|show), run without a shell and with a timeout. `DevAgent`
+  (`src/kaos/plugins/agents/dev_agent.py`) runs a bounded JSON tool-use loop
+  (provider-agnostic, works with local Ollama models) and emits a traceable
+  `dev.session` artifact (task, per-step tool+args+observation, final answer,
+  dashboard-friendly summary). CLI `kaos dev "<task>" [--repo-root .]
+  [--max-steps N] [--dry-run]`. Tiny models follow the protocol unreliably; a
+  stronger instruct model (e.g. qwen2.5:7b) is recommended for real use.
 - Web console dry-run preview: a "Vista previa" tab summarizes a subscription
   (forum consolidated / channel) or a GitHub repo and shows the result **without
   publishing to Discord** — even with a real Discord token in the environment.

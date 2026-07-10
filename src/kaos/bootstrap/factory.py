@@ -10,6 +10,7 @@ from __future__ import annotations
 from kaos.contracts.config_store import ConfigStore
 from kaos.contracts.credential_store import CredentialStore
 from kaos.contracts.llm import LLMProvider
+from kaos.contracts.publisher import Publisher
 from kaos.contracts.storage import Storage
 from kaos.contracts.subscription import SubscriptionStore
 from kaos.core.config import Settings
@@ -21,12 +22,6 @@ from kaos.plugins.connectors import (
     DiscordGatewaySource,
     StaticDiscordSource,
 )
-from kaos.plugins.publishers import (
-    ConsolePublisher,
-    DiscordPublisher,
-    DiscordRestPoster,
-    DiscordWebhookPublisher,
-)
 from kaos.plugins.providers import (
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_OLLAMA_MODEL,
@@ -34,10 +29,19 @@ from kaos.plugins.providers import (
     OPENAI_BASE_URL,
     OpenAICompatibleLLMProvider,
 )
-from kaos.runtime import InMemoryStorage, KaosRuntime
-from kaos.runtime import InMemorySubscriptionStore
-from kaos.runtime import InMemoryConfigStore
-from kaos.runtime import InMemoryCredentialStore
+from kaos.plugins.publishers import (
+    ConsolePublisher,
+    DiscordPublisher,
+    DiscordRestPoster,
+    DiscordWebhookPublisher,
+)
+from kaos.runtime import (
+    InMemoryConfigStore,
+    InMemoryCredentialStore,
+    InMemoryStorage,
+    InMemorySubscriptionStore,
+    KaosRuntime,
+)
 from kaos.runtime.demo import SAMPLE_CONVERSATION, SAMPLE_SUMMARY
 from kaos.sdk import EchoLLMProvider
 
@@ -230,7 +234,7 @@ def build_connector(settings: Settings) -> DiscordConnector:
     return DiscordConnector(StaticDiscordSource(list(SAMPLE_CONVERSATION)), emit_completed=True)
 
 
-def build_publisher(settings):  # type: ignore[no-untyped-def]
+def build_publisher(settings: Settings) -> Publisher:
     """Select the publisher: bot REST (preferred), webhook (fallback), or console.
 
     The bot posts into the configured resume thread by id

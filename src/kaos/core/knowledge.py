@@ -162,7 +162,9 @@ async def build_graph(
             graph.add_edge(KnowledgeEdge(source=workspace, target=aid, kind=CONTAINS))
 
             if include_events:
-                _add_event_nodes(graph, aid, artifact.source_events, events_by_id, event_label_length)
+                _add_event_nodes(
+                    graph, aid, artifact.source_events, events_by_id, event_label_length
+                )
     return graph
 
 

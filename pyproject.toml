@@ -55,11 +55,27 @@ src=["src", "tests"]
 [tool.ruff.lint]
 select=["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Body/Query/Depends in defaults is the intended pattern (not B008).
+extend-immutable-calls=["fastapi.Body", "fastapi.Query", "fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded frontend assets (HTML/CSS/JS strings) legitimately exceed the limit.
+"src/kaos/plugins/dashboard/console.py"=["E501"]
+"src/kaos/plugins/dashboard/__init__.py"=["E501"]
+# Tests favour readable, unwrapped assertions/fixtures.
+"tests/*"=["E501"]
+
 [tool.mypy]
 python_version="3.13"
 strict=true
 packages=["kaos"]
 mypy_path="src"
+
+[[tool.mypy.overrides]]
+# asyncpg ships no type stubs / py.typed marker.
+module=["asyncpg", "asyncpg.*"]
+ignore_missing_imports=true
 
 [tool.pytest.ini_options]
 testpaths=["tests"]

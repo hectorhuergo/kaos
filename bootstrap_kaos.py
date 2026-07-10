@@ -74,7 +74,11 @@ def main() -> int:
     else:
         print("uv not found (recommended). Falling back to venv + pip.")
         create_venv()
-        activate = ".venv\\Scripts\\activate" if platform.system() == "Windows" else "source .venv/bin/activate"
+        activate = (
+            ".venv\\Scripts\\activate"
+            if platform.system() == "Windows"
+            else "source .venv/bin/activate"
+        )
         print("Next steps:")
         print(f"  {activate}")
         print("  python -m pip install -e .[dev]")

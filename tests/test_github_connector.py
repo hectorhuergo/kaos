@@ -6,7 +6,7 @@ import asyncio
 
 import httpx
 
-from kaos.contracts import Artifact, Event, EventBus
+from kaos.contracts import Artifact, Event
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import (
     GitHubConnector,

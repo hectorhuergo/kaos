@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from kaos.contracts import Artifact, Event, EventBus
+from kaos.contracts import Artifact, Event
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import DiscordConnector, DiscordMessage, StaticDiscordSource
 from kaos.runtime import InMemoryEventBus, InMemoryStorage, KaosRuntime

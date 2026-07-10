@@ -152,7 +152,7 @@ class OpenAICompatibleLLMProvider:
                 continue
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"]
+            return str(data["choices"][0]["message"]["content"])
         response.raise_for_status()  # pragma: no cover - safety net
         return ""
 
