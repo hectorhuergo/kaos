@@ -12,6 +12,8 @@ from collections.abc import Sequence
 
 from kaos.bootstrap.factory import build_storage, build_subscription_store
 from kaos.contracts.artifact import Artifact
+from kaos.contracts.storage import Storage
+from kaos.contracts.subscription import SubscriptionStore
 from kaos.core.config import Settings
 from kaos.core.knowledge import KnowledgeGraph, build_graph
 from kaos.domain.subscription import Subscription
@@ -28,15 +30,25 @@ def normalize_workspace(workspace: str) -> str:
     return workspace if ":" in workspace else Subscription.workspace_for(workspace)
 
 
-async def resolve_workspaces(workspace: str | None, settings: Settings) -> list[str]:
-    """Return the workspaces to inspect: the given one, or all subscriptions."""
+async def resolve_workspaces(
+    workspace: str | None,
+    settings: Settings,
+    *,
+    subscription_store: SubscriptionStore | None = None,
+) -> list[str]:
+    """Return the workspaces to inspect: the given one, or all subscriptions.
+
+    ``subscription_store`` can be injected to reuse a shared store (the live
+    app owns its lifecycle); otherwise a store is built and closed here.
+    """
     if workspace:
         return [normalize_workspace(workspace)]
-    store = build_subscription_store(settings)
+    store = subscription_store or build_subscription_store(settings)
     try:
         subs = await store.list(active_only=True)
     finally:
-        await _close(store)
+        if subscription_store is None:
+            await _close(store)
     return [s.workspace for s in subs]
 
 
@@ -45,17 +57,27 @@ async def load_knowledge(
     *,
     workspace: str | None = None,
     include_events: bool = False,
+    storage: Storage | None = None,
+    subscription_store: SubscriptionStore | None = None,
 ) -> tuple[list[str], KnowledgeGraph, list[tuple[str, list[Artifact]]]]:
-    """Load the workspaces, the knowledge graph and per-workspace artifacts."""
-    workspaces = await resolve_workspaces(workspace, settings)
-    storage = build_storage(settings)
+    """Load the workspaces, the knowledge graph and per-workspace artifacts.
+
+    ``storage`` and ``subscription_store`` can be injected to reuse shared
+    instances (the caller then owns their lifecycle); otherwise they are built
+    from ``settings`` and closed here.
+    """
+    workspaces = await resolve_workspaces(
+        workspace, settings, subscription_store=subscription_store
+    )
+    store = storage or build_storage(settings)
     try:
-        graph = await build_graph(storage, workspaces, include_events=include_events)
+        graph = await build_graph(store, workspaces, include_events=include_events)
         sections: list[tuple[str, list[Artifact]]] = [
-            (ws, list(await storage.list_artifacts(ws))) for ws in workspaces
+            (ws, list(await store.list_artifacts(ws))) for ws in workspaces
         ]
     finally:
-        await _close(storage)
+        if storage is None:
+            await _close(store)
     return workspaces, graph, sections
 
 

@@ -92,6 +92,7 @@ def run_serve(*, host: str = "127.0.0.1", port: int = 8000) -> int:
     from kaos.plugins.dashboard.app import create_app
 
     print(f"KAOS dashboard vivo en http://{host}:{port}  (Ctrl-C para detener)")
+    print(f"KAOS consola en      http://{host}:{port}/console")
     uvicorn.run(create_app(), host=host, port=port, log_level="info")
     return 0
 

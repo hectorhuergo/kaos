@@ -37,7 +37,26 @@ services:
     volumes:
       - minio_data:/data
 
+  # Local LLM for offline, zero-cost dogfooding (OpenAI-compatible API at /v1).
+  # After `docker compose up -d ollama`, pull a model:
+  #   docker exec kaos-ollama-1 ollama pull llama3.2:3b
+  # For NVIDIA GPU acceleration, uncomment the `deploy` block below.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: ["gpu"]
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  ollama_data:

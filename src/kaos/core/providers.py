@@ -62,12 +62,37 @@ CATALOG: tuple[ProviderInfo, ...] = (
         secret_env=("KAOS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
         notes="Claude por el endpoint compatible de Anthropic.",
     ),
+    ProviderInfo(
+        id="ollama",
+        label="Ollama (local)",
+        default_model="llama3.2:3b",
+        base_url="http://localhost:11434/v1",
+        secret_env=(),
+        notes="Modelos locales vía Ollama (Docker); sin credencial. Ideal para dogfooding.",
+    ),
 )
 
 # Keep the catalog and the validated provider ids in sync.
 assert {p.id for p in CATALOG} == set(LLM_PROVIDERS), (
     "providers.CATALOG must cover exactly config.LLM_PROVIDERS"
 )
+
+
+# Maps a provider to the Settings field that carries its secret, so a persisted
+# credential can be overlaid onto Settings exactly where ``build_llm`` reads it.
+_SECRET_FIELD: dict[str, str] = {
+    "openai": "llm_api_key",
+    "github": "github_token",
+    "anthropic": "anthropic_api_key",
+}
+
+
+def secret_field(provider_id: str) -> str | None:
+    """Return the Settings field holding ``provider_id``'s secret, if any.
+
+    ``echo`` needs no secret and returns ``None``.
+    """
+    return _SECRET_FIELD.get(provider_id)
 
 
 def is_ready(provider_id: str, settings: Settings) -> bool:
@@ -78,6 +103,9 @@ def is_ready(provider_id: str, settings: Settings) -> bool:
     the secret for each provider.
     """
     if provider_id == "echo":
+        return True
+    if provider_id == "ollama":
+        # Local server; no credential required (it must be running to serve).
         return True
     if provider_id == "github":
         return bool(settings.github_token or settings.llm_api_key)

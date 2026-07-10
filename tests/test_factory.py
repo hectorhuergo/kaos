@@ -10,7 +10,9 @@ from kaos.core.config import Settings
 from kaos.plugins.providers import (
     ANTHROPIC_BASE_URL,
     DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_OLLAMA_MODEL,
     GITHUB_MODELS_BASE_URL,
+    OLLAMA_BASE_URL,
     OpenAICompatibleLLMProvider,
 )
 from kaos.plugins.publishers import ConsolePublisher
@@ -61,6 +63,30 @@ def test_build_llm_openai_uses_base_url() -> None:
     llm = build_llm(settings)
     assert isinstance(llm, OpenAICompatibleLLMProvider)
     assert llm._base_url == "https://x/v1"  # type: ignore[attr-defined]
+
+
+def test_build_llm_ollama_defaults_no_secret() -> None:
+    # Local provider: no credential needed; app-wide default model is replaced
+    # by Ollama's default tag and the local endpoint is used.
+    settings = Settings.from_env({"KAOS_LLM_PROVIDER": "ollama"})
+    llm = build_llm(settings)
+    assert isinstance(llm, OpenAICompatibleLLMProvider)
+    assert llm.name == "ollama"
+    assert llm._base_url == OLLAMA_BASE_URL  # type: ignore[attr-defined]
+    assert llm._model == DEFAULT_OLLAMA_MODEL  # type: ignore[attr-defined]
+
+
+def test_build_llm_ollama_honours_model_and_base_url() -> None:
+    settings = Settings.from_env(
+        {
+            "KAOS_LLM_PROVIDER": "ollama",
+            "KAOS_LLM_MODEL": "qwen2.5:7b",
+            "KAOS_LLM_BASE_URL": "http://ollama:11434/v1",
+        }
+    )
+    llm = build_llm(settings)
+    assert llm._model == "qwen2.5:7b"  # type: ignore[attr-defined]
+    assert llm._base_url == "http://ollama:11434/v1"  # type: ignore[attr-defined]
 
 
 def test_build_runtime_offline_demo_runs(monkeypatch) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from kaos.plugins.publishers.capturing_publisher import CapturingPublisher
 from kaos.plugins.publishers.console_publisher import ConsolePublisher
 from kaos.plugins.publishers.discord_publisher import (
     DiscordPoster,
@@ -11,6 +12,7 @@ from kaos.plugins.publishers.discord_publisher import (
 )
 
 __all__ = [
+    "CapturingPublisher",
     "ConsolePublisher",
     "DiscordPoster",
     "DiscordPublisher",

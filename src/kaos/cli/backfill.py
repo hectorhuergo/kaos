@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import httpx
 
-from kaos.bootstrap.factory import build_llm, build_publisher, build_storage
+from kaos.bootstrap.factory import build_llm, build_publisher, build_storage, load_settings
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.context import Context
 from kaos.contracts.event import Event
+from kaos.contracts.publisher import Publisher
 from kaos.core.cache import (
     CONTENT_HASH,
     MODEL,
@@ -36,9 +37,15 @@ async def run_backfill(
     dry_run: bool = False,
     limit: int | None = None,
     settings: Settings | None = None,
+    publisher: Publisher | None = None,
 ) -> int:
-    """Read a channel's history, summarize it, and publish (or print) the result."""
-    settings = settings if settings is not None else Settings.from_env()
+    """Read a channel's history, summarize it, and publish (or print) the result.
+
+    When ``publisher`` is provided it is used instead of the configured one (e.g.
+    a capturing publisher for a web-console dry-run preview), so nothing is sent
+    to Discord regardless of the environment.
+    """
+    settings = await load_settings(settings)
     if not settings.discord_token:
         print("error: KAOS_DISCORD_TOKEN is not set (needed to read Discord)")
         return 1
@@ -59,7 +66,9 @@ async def run_backfill(
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(DiscordConnector(source, emit_completed=True))
     runtime.register_agent(ResumeAgent(llm))
-    runtime.register_publisher(ConsolePublisher() if dry_run else build_publisher(settings))
+    runtime.register_publisher(
+        publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
+    )
 
     print(f"KAOS backfill — channel {channel_id} (dry_run={dry_run})\n")
     await runtime.start()
@@ -87,6 +96,7 @@ async def run_forum_backfill(
     force: bool = False,
     only_if_changed: bool = False,
     settings: Settings | None = None,
+    publisher: Publisher | None = None,
 ) -> int:
     """Summarize every thread of a Discord forum channel.
 
@@ -103,8 +113,12 @@ async def run_forum_backfill(
     With ``only_if_changed=True`` nothing is published when every thread was a
     cache hit (no changes). This makes a run idempotent: re-running without any
     new messages produces no new publication — the rule the scheduler follows.
+
+    When ``publisher`` is provided it is used instead of the configured one (e.g.
+    a capturing publisher for a web-console dry-run preview), so nothing is sent
+    to Discord regardless of the environment.
     """
-    settings = settings if settings is not None else Settings.from_env()
+    settings = await load_settings(settings)
     if not settings.discord_token:
         print("error: KAOS_DISCORD_TOKEN is not set (needed to read Discord)")
         return 1
@@ -119,7 +133,7 @@ async def run_forum_backfill(
         return 1
 
     agent = ResumeAgent(llm)
-    publisher = ConsolePublisher() if dry_run else build_publisher(settings)
+    publisher = publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     storage = build_storage(settings)
     cache = SummaryCache(storage)
     workspace = f"discord:{forum_channel_id}"

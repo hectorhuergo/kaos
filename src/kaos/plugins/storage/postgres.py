@@ -14,6 +14,8 @@ from uuid import UUID
 
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.event import Event
+from kaos.domain.provider_credential import ProviderCredential
+from kaos.domain.runtime_config import SINGLETON, RuntimeConfig
 from kaos.domain.subscription import Subscription
 
 _SCHEMA = """
@@ -53,6 +55,25 @@ CREATE TABLE IF NOT EXISTS kaos_subscriptions (
     created_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_kaos_subscriptions_active ON kaos_subscriptions (active);
+"""
+
+_RUNTIME_CONFIG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS kaos_runtime_config (
+    name text PRIMARY KEY,
+    llm_provider text NOT NULL,
+    llm_model text NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+"""
+
+_CREDENTIALS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS kaos_provider_credentials (
+    provider text PRIMARY KEY,
+    api_key text NOT NULL DEFAULT '',
+    model text NOT NULL DEFAULT '',
+    base_url text NOT NULL DEFAULT '',
+    updated_at timestamptz NOT NULL
+);
 """
 
 
@@ -250,3 +271,136 @@ class PostgresSubscriptionStore:
         )
 
 
+class PostgresConfigStore:
+    """Durable ConfigStore backed by PostgreSQL via asyncpg.
+
+    Persists the single active :class:`RuntimeConfig` as one upserted row.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._pool: Any = None
+
+    async def _ensure_pool(self) -> Any:
+        if self._pool is None:
+            import asyncpg  # lazy import: only needed for PostgreSQL
+
+            self._pool = await asyncpg.create_pool(self._dsn)
+            async with self._pool.acquire() as conn:
+                await conn.execute(_RUNTIME_CONFIG_SCHEMA)
+        return self._pool
+
+    async def get(self) -> RuntimeConfig | None:
+        pool = await self._ensure_pool()
+        row = await pool.fetchrow(
+            "SELECT * FROM kaos_runtime_config WHERE name = $1", SINGLETON
+        )
+        if row is None:
+            return None
+        return RuntimeConfig(
+            llm_provider=row["llm_provider"],
+            llm_model=row["llm_model"],
+            updated_at=row["updated_at"],
+        )
+
+    async def set(self, config: RuntimeConfig) -> None:
+        pool = await self._ensure_pool()
+        await pool.execute(
+            """
+            INSERT INTO kaos_runtime_config
+                (name, llm_provider, llm_model, updated_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (name) DO UPDATE SET
+                llm_provider = EXCLUDED.llm_provider,
+                llm_model = EXCLUDED.llm_model,
+                updated_at = EXCLUDED.updated_at
+            """,
+            SINGLETON,
+            config.llm_provider,
+            config.llm_model,
+            config.updated_at,
+        )
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+
+class PostgresCredentialStore:
+    """Durable CredentialStore backed by PostgreSQL via asyncpg.
+
+    Persists one :class:`ProviderCredential` per provider (upserted by id). The
+    secret is stored as-is; keep DB access restricted. The API layer never
+    returns it — only whether a credential exists.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._pool: Any = None
+
+    async def _ensure_pool(self) -> Any:
+        if self._pool is None:
+            import asyncpg  # lazy import: only needed for PostgreSQL
+
+            self._pool = await asyncpg.create_pool(self._dsn)
+            async with self._pool.acquire() as conn:
+                await conn.execute(_CREDENTIALS_SCHEMA)
+        return self._pool
+
+    async def get(self, provider: str) -> ProviderCredential | None:
+        pool = await self._ensure_pool()
+        row = await pool.fetchrow(
+            "SELECT * FROM kaos_provider_credentials WHERE provider = $1", provider
+        )
+        return self._to_credential(row) if row is not None else None
+
+    async def set(self, credential: ProviderCredential) -> None:
+        pool = await self._ensure_pool()
+        await pool.execute(
+            """
+            INSERT INTO kaos_provider_credentials
+                (provider, api_key, model, base_url, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (provider) DO UPDATE SET
+                api_key = EXCLUDED.api_key,
+                model = EXCLUDED.model,
+                base_url = EXCLUDED.base_url,
+                updated_at = EXCLUDED.updated_at
+            """,
+            credential.provider,
+            credential.api_key,
+            credential.model,
+            credential.base_url,
+            credential.updated_at,
+        )
+
+    async def delete(self, provider: str) -> bool:
+        pool = await self._ensure_pool()
+        result = await pool.execute(
+            "DELETE FROM kaos_provider_credentials WHERE provider = $1", provider
+        )
+        # asyncpg returns a status like "DELETE 1".
+        return result.rsplit(" ", 1)[-1] != "0"
+
+    async def list(self) -> list[ProviderCredential]:
+        pool = await self._ensure_pool()
+        rows = await pool.fetch(
+            "SELECT * FROM kaos_provider_credentials ORDER BY provider"
+        )
+        return [self._to_credential(row) for row in rows]
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    @staticmethod
+    def _to_credential(row: Any) -> ProviderCredential:
+        return ProviderCredential(
+            provider=row["provider"],
+            api_key=row["api_key"],
+            model=row["model"],
+            base_url=row["base_url"],
+            updated_at=row["updated_at"],
+        )

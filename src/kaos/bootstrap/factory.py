@@ -7,10 +7,13 @@ and the plugins decoupled from each other.
 
 from __future__ import annotations
 
+from kaos.contracts.config_store import ConfigStore
+from kaos.contracts.credential_store import CredentialStore
 from kaos.contracts.llm import LLMProvider
 from kaos.contracts.storage import Storage
 from kaos.contracts.subscription import SubscriptionStore
 from kaos.core.config import Settings
+from kaos.core.providers import secret_field
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import (
     DiscordBackfillSource,
@@ -24,9 +27,17 @@ from kaos.plugins.publishers import (
     DiscordRestPoster,
     DiscordWebhookPublisher,
 )
-from kaos.plugins.providers import OPENAI_BASE_URL, DEFAULT_ANTHROPIC_MODEL, OpenAICompatibleLLMProvider
+from kaos.plugins.providers import (
+    DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_OLLAMA_MODEL,
+    OLLAMA_BASE_URL,
+    OPENAI_BASE_URL,
+    OpenAICompatibleLLMProvider,
+)
 from kaos.runtime import InMemoryStorage, KaosRuntime
 from kaos.runtime import InMemorySubscriptionStore
+from kaos.runtime import InMemoryConfigStore
+from kaos.runtime import InMemoryCredentialStore
 from kaos.runtime.demo import SAMPLE_CONVERSATION, SAMPLE_SUMMARY
 from kaos.sdk import EchoLLMProvider
 
@@ -53,6 +64,89 @@ def build_subscription_store(settings: Settings) -> SubscriptionStore:
     return InMemorySubscriptionStore()
 
 
+def build_config_store(settings: Settings) -> ConfigStore:
+    """Select the config store: PostgreSQL if configured, else in-memory.
+
+    Holds the persisted runtime selection (LLM provider + model) edited from the
+    web console. Like subscriptions, it is only durable with a `DATABASE_URL`.
+    """
+    if settings.database_url:
+        from kaos.plugins.storage import PostgresConfigStore
+
+        return PostgresConfigStore(settings.database_url)
+    return InMemoryConfigStore()
+
+
+def build_credential_store(settings: Settings) -> CredentialStore:
+    """Select the credential store: PostgreSQL if configured, else in-memory.
+
+    Holds the per-provider secrets (API keys/tokens) edited from the web console.
+    The environment stays as the fallback (see :func:`load_settings`), so a
+    provider works with either a persisted credential or its `.env` value.
+    """
+    if settings.database_url:
+        from kaos.plugins.storage import PostgresCredentialStore
+
+        return PostgresCredentialStore(settings.database_url)
+    return InMemoryCredentialStore()
+
+
+async def _close(obj: object) -> None:
+    close = getattr(obj, "close", None)
+    if close is not None:
+        await close()
+
+
+async def load_settings(base: Settings | None = None) -> Settings:
+    """Return ``base`` (or env settings) overlaid with the persisted config.
+
+    Two kinds of durable, non-environment state are overlaid so a change made in
+    the web console takes effect on the next run without a redeploy:
+
+    1. The active runtime selection (LLM provider + model) from the
+       :class:`ConfigStore`.
+    2. The active provider's credential (API key/token + optional model/base_url
+       overrides) from the :class:`CredentialStore`.
+
+    The environment is the **fallback**: when nothing is persisted the value from
+    ``base`` (i.e. ``.env``) is kept. Without a ``database_url`` this is a no-op.
+    """
+    base = base if base is not None else Settings.from_env()
+    if not base.database_url:
+        return base
+
+    updates: dict[str, object] = {}
+
+    config_store = build_config_store(base)
+    try:
+        config = await config_store.get()
+    finally:
+        await _close(config_store)
+    if config is not None:
+        updates["llm_provider"] = config.llm_provider
+        updates["llm_model"] = config.llm_model
+
+    # Resolve the credential for whichever provider is now active.
+    provider = str(updates.get("llm_provider", base.llm_provider))
+    credential_store = build_credential_store(base)
+    try:
+        credential = await credential_store.get(provider)
+    finally:
+        await _close(credential_store)
+    if credential is not None:
+        if credential.model:
+            updates["llm_model"] = credential.model
+        if credential.base_url:
+            updates["llm_base_url"] = credential.base_url
+        field = secret_field(provider)
+        if field and credential.api_key:
+            updates[field] = credential.api_key
+
+    if not updates:
+        return base
+    return base.model_copy(update=updates)
+
+
 def build_llm(settings: Settings) -> LLMProvider:
     """Select the LLM provider from configuration."""
     if settings.llm_provider == "github":
@@ -74,6 +168,19 @@ def build_llm(settings: Settings) -> LLMProvider:
         model = settings.llm_model if "claude" in settings.llm_model else DEFAULT_ANTHROPIC_MODEL
         return OpenAICompatibleLLMProvider.anthropic(
             api_key=key, model=model, timeout=settings.llm_timeout
+        )
+    if settings.llm_provider == "ollama":
+        # Local, no secret. Use the configured base URL/model, falling back to
+        # Ollama's defaults when the app-wide default model is still in place.
+        base_url = settings.llm_base_url or OLLAMA_BASE_URL
+        default_model = Settings.model_fields["llm_model"].default
+        model = (
+            settings.llm_model
+            if settings.llm_model and settings.llm_model != default_model
+            else DEFAULT_OLLAMA_MODEL
+        )
+        return OpenAICompatibleLLMProvider.ollama(
+            model=model, base_url=base_url, timeout=settings.llm_timeout
         )
     if settings.llm_provider == "openai":
         if not settings.llm_api_key:

@@ -24,6 +24,8 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 GITHUB_MODELS_BASE_URL = "https://models.inference.ai.azure.com"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_ANTHROPIC_MODEL = "claude-3-5-haiku-latest"
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
 _RATE_LIMITED = 429
 _MAX_WAIT_SECONDS = 65.0
 
@@ -94,6 +96,32 @@ class OpenAICompatibleLLMProvider:
             api_key=api_key,
             base_url=ANTHROPIC_BASE_URL,
             name="anthropic",
+            client=client,
+            timeout=timeout,
+        )
+
+    @classmethod
+    def ollama(
+        cls,
+        model: str = DEFAULT_OLLAMA_MODEL,
+        *,
+        base_url: str = OLLAMA_BASE_URL,
+        client: httpx.AsyncClient | None = None,
+        timeout: float = 120.0,
+    ) -> OpenAICompatibleLLMProvider:
+        """Build a provider for a local Ollama server (OpenAI-compatible API).
+
+        Ollama runs models locally and ignores the auth header, so **no secret is
+        needed** — ideal for offline dogfooding and iterating on new agents at
+        zero cost. Start it with ``docker compose up -d ollama`` and pull a model
+        (``ollama pull llama3.2:3b``). The default endpoint assumes KAOS runs on
+        the host; override ``base_url`` (``KAOS_LLM_BASE_URL``) if not.
+        """
+        return cls(
+            model=model,
+            api_key="ollama",  # ignored by Ollama; kept for the Bearer header
+            base_url=base_url,
+            name="ollama",
             client=client,
             timeout=timeout,
         )

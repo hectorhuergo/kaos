@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import httpx
 
-from kaos.bootstrap.factory import build_llm, build_publisher, build_storage
+from kaos.bootstrap.factory import build_llm, build_publisher, build_storage, load_settings
+from kaos.contracts.publisher import Publisher
 from kaos.core.config import Settings
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import GitHubConnector, GitHubRestSource
@@ -25,9 +26,15 @@ async def run_github(
     limit: int = 30,
     include_issues: bool = True,
     settings: Settings | None = None,
+    publisher: Publisher | None = None,
 ) -> int:
-    """Summarize a repository's recent activity and publish (or print) it."""
-    settings = settings if settings is not None else Settings.from_env()
+    """Summarize a repository's recent activity and publish (or print) it.
+
+    When ``publisher`` is provided it is used instead of the configured one
+    (e.g. a capturing publisher for a web-console dry-run preview), so nothing is
+    sent to Discord regardless of the environment.
+    """
+    settings = await load_settings(settings)
     target = repo or settings.github_repo
     if not target:
         print("error: falta el repositorio (argumento <owner/repo> o KAOS_GITHUB_REPO)")
@@ -48,7 +55,9 @@ async def run_github(
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(GitHubConnector(source, repo=target, emit_completed=True))
     runtime.register_agent(ResumeAgent(llm))
-    runtime.register_publisher(ConsolePublisher() if dry_run else build_publisher(settings))
+    runtime.register_publisher(
+        publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
+    )
 
     print(f"KAOS github — {target} (dry_run={dry_run})\n")
     try:

@@ -48,6 +48,28 @@ Esto ejercita el pipeline completo **Connector → Agent → Publisher** con el
 `EchoLLMProvider` (sin red, determinístico). `kaos up` a secas arranca el runtime
 según tu `.env`.
 
+## 2b. LLM local con Ollama (dogfooding sin costo)
+
+Para iterar sobre los agentes sin gastar cuota, KAOS puede usar un modelo local
+vía **Ollama** (endpoint compatible con OpenAI):
+
+```bash
+docker compose -f docker/docker-compose.yml up -d ollama
+docker exec kaos-ollama-1 ollama pull llama3.2:3b   # ~2 GB; una sola vez
+```
+
+En `.env` (o desde la consola web):
+
+```dotenv
+KAOS_LLM_PROVIDER=ollama
+KAOS_LLM_MODEL=llama3.2:3b     # o qwen2.5:7b, mistral, etc.
+# KAOS_LLM_BASE_URL=http://localhost:11434/v1   # default; cambiar si no corre en el host
+```
+
+No requiere credencial. Modelos más grandes (`qwen2.5:7b`, `llama3.1:8b`) dan
+mejores resúmenes a cambio de más RAM/latencia; descomentá el bloque `deploy` de
+`ollama` en el compose para acelerar con GPU NVIDIA.
+
 ## 3. Corrida real (Discord + LLM, ~5 min)
 
 ### 3.1 Configurar `.env`
@@ -122,6 +144,17 @@ kaos serve --port 8000                             # dashboard vivo (FastAPI)
 
 Dashboard vivo en `http://127.0.0.1:8000` (rutas: `/`, `/api/knowledge`,
 `/api/artifacts`, `/api/workspaces`).
+
+### Consola web
+
+`http://127.0.0.1:8000/console` — administra desde el navegador:
+
+- **Providers**: elegí el provider/modelo LLM activo. La selección se guarda en
+  PostgreSQL (`kaos_runtime_config`) y se aplica en el próximo `run`. Los
+  secretos (API keys/tokens) siguen en `.env`; la consola solo muestra si el
+  provider tiene credencial (readiness), nunca el valor.
+- **Subscriptions**: alta y baja de foros/canales vigilados.
+- **Dashboards**: enlaces al dashboard vivo de cada workspace.
 
 ## 6. Crear un plugin (dogfooding)
 

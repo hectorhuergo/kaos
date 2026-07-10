@@ -1,6 +1,40 @@
 # Changelog
 
 ## Unreleased
+- Web console dry-run preview: a "Vista previa" tab summarizes a subscription
+  (forum consolidated / channel) or a GitHub repo and shows the result **without
+  publishing to Discord** — even with a real Discord token in the environment.
+  New `CapturingPublisher` (`src/kaos/plugins/publishers/`) collects artifacts
+  instead of sending them; `run_backfill`/`run_forum_backfill`/`run_github` gain
+  an optional `publisher` argument so the pipeline is reused unchanged. Routes
+  `POST /api/preview/subscription` and `POST /api/preview/github` (both return
+  `published: false`). Reading the source still happens; only publishing is
+  suppressed. ADR-0013.
+- Local LLM (dogfooding): `ollama` provider — a local, zero-cost,
+  OpenAI-compatible backend served by Ollama in Docker (`docker/docker-compose.yml`
+  `ollama` service, port 11434). `OpenAICompatibleLLMProvider.ollama()` needs no
+  secret; default model `llama3.2:3b` (override with `KAOS_LLM_MODEL`, endpoint
+  with `KAOS_LLM_BASE_URL`). Added to `LLM_PROVIDERS`, the provider catalog
+  (always ready, no credential) and `build_llm`. Ideal for iterating on the
+  upcoming agents offline. See QUICKSTART.
+- Web console: an admin surface on the same FastAPI app (`GET /console`,
+  `src/kaos/plugins/dashboard/console.py`) — a self-contained HTML page (vanilla
+  JS, no build step) to manage the active LLM provider/model, **provider
+  credentials**, subscriptions (add + deactivate) and browse the per-workspace
+  dashboards. JSON routes: `GET /api/providers`, `PUT /api/config/provider`,
+  `PUT/DELETE /api/providers/{id}/credential`, `GET/POST /api/subscriptions` and
+  `DELETE /api/subscriptions/{channel_id}`. `kaos serve` also prints the console
+  URL. ADR-0013.
+- Persisted runtime config & credentials: `RuntimeConfig` +
+  `ProviderCredential` domain entities and the `ConfigStore` + `CredentialStore`
+  contracts, with in-memory and PostgreSQL (`kaos_runtime_config`,
+  `kaos_provider_credentials`) backends selected by `build_config_store` /
+  `build_credential_store`. The active LLM provider/model and each provider's
+  **secret** can be persisted in PostgreSQL; `factory.load_settings()` overlays
+  both onto the environment `Settings` so knowledge-producing commands
+  (`backfill`, `backfill-forum`, `github`, and therefore `run`/`schedule`) honour
+  them on the next run. The environment (`.env`) is the fallback; secrets are
+  write-only over the API (never returned). Flexes the Config Split (ADR-0008).
 - Demo: `docs/DEMO.md` (guion para presentar KAOS) + `scripts/demo.ps1` (demo
   reproducible en Windows que espera a Postgres por healthcheck y usa
   `python -m kaos.cli.main` cuando no existe el ejecutable `kaos`).

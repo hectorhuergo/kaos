@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 
-LLM_PROVIDERS = ("echo", "openai", "github", "anthropic")
+LLM_PROVIDERS = ("echo", "openai", "github", "anthropic", "ollama")
 
 
 def load_dotenv(path: str | Path = ".env", *, override: bool = False) -> None:

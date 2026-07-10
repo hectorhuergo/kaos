@@ -5,7 +5,9 @@ from __future__ import annotations
 from kaos.plugins.providers.openai_compatible import (
     ANTHROPIC_BASE_URL,
     DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_OLLAMA_MODEL,
     GITHUB_MODELS_BASE_URL,
+    OLLAMA_BASE_URL,
     OPENAI_BASE_URL,
     OpenAICompatibleLLMProvider,
 )
@@ -13,7 +15,9 @@ from kaos.plugins.providers.openai_compatible import (
 __all__ = [
     "ANTHROPIC_BASE_URL",
     "DEFAULT_ANTHROPIC_MODEL",
+    "DEFAULT_OLLAMA_MODEL",
     "GITHUB_MODELS_BASE_URL",
+    "OLLAMA_BASE_URL",
     "OPENAI_BASE_URL",
     "OpenAICompatibleLLMProvider",
 ]

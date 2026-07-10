@@ -40,8 +40,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         )
 
     asyncio.run(seed())
-    monkeypatch.setattr("kaos.plugins.dashboard.service.build_storage", lambda _s: storage)
-    return TestClient(create_app(Settings()))
+    return TestClient(create_app(Settings(), storage=storage))
 
 
 def test_index_returns_html(client: TestClient) -> None:

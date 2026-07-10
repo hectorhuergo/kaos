@@ -30,6 +30,13 @@ def test_openai_ready_with_llm_key() -> None:
     assert is_ready("openai", Settings(llm_api_key="sk")) is True
 
 
+def test_ollama_is_always_ready_and_needs_no_secret() -> None:
+    from kaos.core.providers import secret_field
+
+    assert is_ready("ollama", Settings()) is True
+    assert secret_field("ollama") is None
+
+
 def test_provider_status_marks_active_and_readiness() -> None:
     settings = Settings(llm_provider="github", github_token="ghp_x")
     status = {info.id: (ready, active) for info, ready, active in provider_status(settings)}
