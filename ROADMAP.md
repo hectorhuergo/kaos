@@ -30,6 +30,15 @@
 - [ ] Odoo Connector
 - [ ] Multi-workspace
 
+## Beta test amplio — toque final (M1 · EPIC-002)
+- [ ] Suscripciones con Provider, Modelo y Agente propios (además del plan)
+- [ ] Publisher del Dev Agent para escribir código (reusable por cualquier agente)
+- [ ] Agentes reutilizan artifacts por defecto (salvo `force`)
+- [ ] Consola para interactuar con los agentes
+- [ ] (Opcional) GitHub Copilot API como `LLMProvider` (generalizar providers)
+- [ ] Crear los agentes faltantes de la especificación inicial
+- [ ] Descanso y dogfooding 🎉
+
 ## Integraciones futuras
 - [ ] Integración con el sistema de usuarios de **proyecto-x-grid**
       (autenticación/identidad compartida para autores, permisos y multi-tenant)
