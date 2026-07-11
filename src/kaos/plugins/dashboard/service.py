@@ -72,6 +72,9 @@ async def load_knowledge(
     store = storage or build_storage(settings)
     try:
         graph = await build_graph(store, workspaces, include_events=include_events)
+        # Keep *all* artifacts here (the graph is deduped to one node per subject,
+        # but the view groups the versions of a node into a navigable card, so it
+        # needs the full history — e.g. the same thread summarized by two models).
         sections: list[tuple[str, list[Artifact]]] = [
             (ws, list(await store.list_artifacts(ws))) for ws in workspaces
         ]

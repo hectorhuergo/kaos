@@ -40,12 +40,14 @@ async def run_backfill(
     limit: int | None = None,
     settings: Settings | None = None,
     publisher: Publisher | None = None,
+    extra_instructions: str = "",
 ) -> int:
     """Read a channel's history, summarize it, and publish (or print) the result.
 
     When ``publisher`` is provided it is used instead of the configured one (e.g.
     a capturing publisher for a web-console dry-run preview), so nothing is sent
-    to Discord regardless of the environment.
+    to Discord regardless of the environment. ``extra_instructions`` augment the
+    Resume Agent's prompt (focus/tone) without changing its required structure.
     """
     settings = await load_settings(settings)
     if not settings.discord_token:
@@ -67,7 +69,7 @@ async def run_backfill(
     storage = InMemoryStorage() if dry_run else build_storage(settings)
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(DiscordConnector(source, emit_completed=True))
-    runtime.register_agent(ResumeAgent(llm))
+    runtime.register_agent(ResumeAgent(llm, extra_instructions=extra_instructions))
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     )
@@ -99,6 +101,7 @@ async def run_forum_backfill(
     only_if_changed: bool = False,
     settings: Settings | None = None,
     publisher: Publisher | None = None,
+    extra_instructions: str = "",
 ) -> int:
     """Summarize every thread of a Discord forum channel.
 
@@ -134,7 +137,7 @@ async def run_forum_backfill(
         print(f"error: {exc}")
         return 1
 
-    agent = ResumeAgent(llm)
+    agent = ResumeAgent(llm, extra_instructions=extra_instructions)
     publisher = publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     storage = build_storage(settings)
     cache = SummaryCache(storage)

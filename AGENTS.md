@@ -124,6 +124,9 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0012 — GitHub Connector
 - ADR-0013 — Web Console & Persisted Runtime Config
 - ADR-0014 — Dev Agent & Tool-Using Agents
+- ADR-0015 — GitHub Subscriptions & Subscription Runner Registry
+- ADR-0016 — Scheduler Execution Plan (per-subscription cadence)
+- ADR-0017 — Console: Agent Catalog, Prompt Augmentation & Interactive Run
 
 ### RFC
 

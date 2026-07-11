@@ -66,3 +66,50 @@ def test_api_artifacts_returns_items(client: TestClient) -> None:
     assert payload[0]["workspace"] == WS
     assert payload[0]["items"][0]["metadata"]["thread_name"] == "PMO"
 
+
+def test_api_artifacts_returns_all_versions_of_a_thread() -> None:
+    # The same thread summarized by two models is kept as two versions (the graph
+    # is deduped to one node, but the view groups the versions into one card).
+    storage = InMemoryStorage()
+
+    async def seed() -> None:
+        older = Artifact(
+            kind="conversation.summary",
+            workspace=WS,
+            produced_by="resume-agent",
+            content={"summary": "v1", "message_count": 1},
+            metadata={"thread_name": "Innova CFI", "model": "llama3.2:3b"},
+        )
+        await storage.save_artifact(older)
+        newer = Artifact(  # a distinct artifact (new id) for the same thread
+            kind="conversation.summary",
+            workspace=WS,
+            produced_by="resume-agent",
+            content={"summary": "v2", "message_count": 1},
+            metadata={"thread_name": "Innova CFI", "model": "qwen2.5:3b"},
+            timestamp=_later(older.timestamp),  # type: ignore[arg-type]
+        )
+        await storage.save_artifact(newer)
+
+    asyncio.run(seed())
+    client = TestClient(create_app(Settings(), storage=storage))
+    # The API returns every version…
+    items = client.get("/api/artifacts", params={"workspace": WS}).json()["artifacts"][0][
+        "items"
+    ]
+    assert len(items) == 2
+    # …and the dashboard groups them into a single navigable card (one card
+    # title, two versions, a version navigator).
+    html_doc = client.get("/", params={"workspace": WS}).text
+    assert html_doc.count("<h3>Innova CFI</h3>") == 1
+    assert html_doc.count("class='version'") == 2
+    assert "ver-nav" in html_doc
+    assert "llama3.2:3b" in html_doc and "qwen2.5:3b" in html_doc
+
+
+def _later(ts: object) -> object:
+    from datetime import timedelta
+
+    return ts + timedelta(seconds=1)  # type: ignore[operator]
+
+

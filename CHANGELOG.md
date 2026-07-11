@@ -1,6 +1,62 @@
 # Changelog
 
 ## Unreleased
+- Console — run & publish + "run all": the run action gains a **publish** toggle
+  (route `POST /api/run/subscription` accepts `publish`; a `_TeePublisher`
+  publishes to Discord *and* captures for display) and a new **`POST /api/run/all`**
+  runs every active subscription. Persisting + cache-warming stays the default;
+  publishing is opt-in. ADR-0017.
+- Scheduler — per-subscription execution plan: `Subscription.interval_seconds`
+  (persisted; `NULL`/`None` = every pass) sets how often the scheduler runs each
+  subscription. `kaos schedule` now ticks at a base cadence and runs only the
+  **due** subscriptions (pure `due_subscriptions`), tracking last-run per process;
+  `run_subscriptions(only=…)` filters by channel. Set it with
+  `kaos subscribe … --every SECONDS` or the console's "Plan" field. ADR-0016.
+- Console — per-agent prompt augmentation: the "Agentes" tab now shows a prompt
+  field **per augmentable agent** (by id); the summary pipeline consumes the
+  resume-agent's. ADR-0017.
+- Web console — interactive run (persist + cache): the "Vista previa" tab gains
+  an **"Ejecutar"** action (route `POST /api/run/subscription`) that runs the
+  real pipeline for a subscription so it **stores the summaries and populates the
+  summary cache** — just like a scheduled `kaos run` — but with a
+  `CapturingPublisher` so **nothing is posted to Discord** (publishing stays a
+  deliberate CLI/scheduler step). Optional `force` re-summarizes ignoring the
+  cache. New `kaos.plugins.dashboard.execute.run_subscription`. Preview stays a
+  non-persisting dry-run.
+- Web console — Agents view + prompt augmentation: new "Agentes" tab lists the
+  agents KAOS ships (from a read-only catalog `kaos.core.agents`, exposed at
+  `GET /api/agents`) and offers an "instrucciones extra" field that augments the
+  Resume Agent's prompt (focus/tone) without changing its required structure.
+  `ResumeAgent(llm, extra_instructions=...)` appends the guidance to the base
+  system prompt; `extra_instructions` is threaded through `run_backfill`,
+  `run_forum_backfill`, `run_github` and both preview routes
+  (`POST /api/preview/{github,subscription}`).
+- Subscriptions — decoupled dispatch: `run_subscriptions` now resolves the runner
+  from a `SUBSCRIPTION_RUNNERS` registry (kind → handler) instead of an
+  `if/elif` chain, so a new source kind only adds its runner. This keeps the
+  subscription loop agnostic of the concrete connector behind each kind.
+- Scheduler as an app: `docker/Dockerfile` (installs `kaos`) plus opt-in
+  `scheduler` and `dashboard` services in `docker-compose.yml` (profile `app`,
+  `docker compose --profile app up -d --build`). The default `up` still starts
+  infra only. The scheduler runs `kaos schedule` (periodic, idempotent `kaos
+  run`); it reads subscriptions from the store — it is a process, not a separate
+  datastore.
+- GitHub repo subscriptions: `kaos subscribe <owner/repo> --github` persists a
+  subscription whose `kind` is `github` and whose `channel_id` is the repo slug
+  (workspace `github:owner/name`). `kaos run`/`kaos schedule` and the web-console
+  preview (`POST /api/preview/subscription`) now dispatch `github` subscriptions
+  to `run_github`, alongside the existing forum/channel Discord flows. New domain
+  helpers `Subscription.workspace_for_github` / `workspace_for_kind`; the console
+  "Nueva suscripción" form gains a `github` option. (The general Git reader —
+  Maxi's work — will be integrated next; see ROADMAP.)
+- Knowledge graph deduplication: `build_graph(..., dedupe=True)` keeps only the
+  most recent artifact per logical subject (its `thread_name`, else its `kind`),
+  so re-summarizing the same conversation with a different model/run no longer
+  shows the same knowledge duplicated once per model. The dashboard, instead of
+  hiding the older versions, **groups them into a single navigable card**: when a
+  node has more than one artifact, arrows switch between versions and the header
+  shows the model and date of each (`group_artifacts`). `GET /api/artifacts`
+  returns every version; the graph stays one node per subject.
 - Dev Agent (first active teammate): a tool-using agent (ADR-0014) that works on
   the local repo. New `Tool` contract (`src/kaos/contracts/tool.py`) and a
   confined dev toolbox (`src/kaos/plugins/tools/dev_tools.py`): `ReadFileTool`,

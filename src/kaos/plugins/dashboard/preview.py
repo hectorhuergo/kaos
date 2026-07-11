@@ -16,7 +16,7 @@ from kaos.cli.github import run_github
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.subscription import SubscriptionStore
 from kaos.core.config import Settings
-from kaos.domain.subscription import FORUM
+from kaos.domain.subscription import FORUM, GITHUB
 from kaos.plugins.publishers import CapturingPublisher
 
 
@@ -42,7 +42,7 @@ def _http_message(exc: httpx.HTTPError) -> str:
 
 
 async def preview_github(
-    settings: Settings, repo: str, *, limit: int = 30
+    settings: Settings, repo: str, *, limit: int = 30, extra_instructions: str = ""
 ) -> list[Artifact]:
     """Summarize a GitHub repo in dry-run and return the captured artifacts."""
     if not repo.strip():
@@ -55,6 +55,7 @@ async def preview_github(
             limit=limit,
             settings=settings,
             publisher=capturing,
+            extra_instructions=extra_instructions,
         )
     except httpx.HTTPError as exc:
         raise PreviewError(_http_message(exc)) from exc
@@ -68,8 +69,9 @@ async def preview_subscription(
     channel_id: str,
     *,
     subscription_store: SubscriptionStore,
+    extra_instructions: str = "",
 ) -> list[Artifact]:
-    """Summarize a subscription (forum consolidated, or channel) in dry-run.
+    """Summarize a subscription (forum consolidated, channel or repo) in dry-run.
 
     Looks up the subscription to know its kind and guild, runs the matching
     pipeline with a capturing publisher and returns the artifacts that *would*
@@ -89,6 +91,18 @@ async def preview_subscription(
                 consolidated=True,
                 settings=settings,
                 publisher=capturing,
+                extra_instructions=extra_instructions,
+            )
+        except httpx.HTTPError as exc:
+            raise PreviewError(_http_message(exc)) from exc
+    elif subscription.kind == GITHUB:
+        try:
+            rc = await run_github(
+                subscription.channel_id,
+                dry_run=True,
+                settings=settings,
+                publisher=capturing,
+                extra_instructions=extra_instructions,
             )
         except httpx.HTTPError as exc:
             raise PreviewError(_http_message(exc)) from exc
@@ -99,6 +113,7 @@ async def preview_subscription(
                 dry_run=True,
                 settings=settings,
                 publisher=capturing,
+                extra_instructions=extra_instructions,
             )
         except httpx.HTTPError as exc:
             raise PreviewError(_http_message(exc)) from exc

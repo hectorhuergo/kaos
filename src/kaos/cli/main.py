@@ -53,11 +53,19 @@ def main() -> int:
         help="publish only when at least one thread changed (idempotent)",
     )
 
-    sb_p = sub.add_parser("subscribe", help="watch a Discord forum/channel")
-    sb_p.add_argument("channel_id", help="Discord forum/channel id to watch")
+    sb_p = sub.add_parser("subscribe", help="watch a Discord forum/channel or a GitHub repo")
+    sb_p.add_argument("channel_id", help="Discord forum/channel id, or owner/repo with --github")
     sb_p.add_argument("--channel", action="store_true", help="subscribe a channel (default: forum)")
+    sb_p.add_argument("--github", action="store_true", help="subscribe a GitHub repo (owner/name)")
     sb_p.add_argument("--guild", default=None, help="guild id (overrides KAOS_DISCORD_GUILD_ID)")
     sb_p.add_argument("--resume-thread", default=None, help="thread id to publish summaries to")
+    sb_p.add_argument(
+        "--every",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="execution plan: run this subscription at most every N seconds",
+    )
 
     un_p = sub.add_parser("unsubscribe", help="stop watching a forum/channel")
     un_p.add_argument("channel_id", help="Discord forum/channel id to unsubscribe")
@@ -188,14 +196,21 @@ def main() -> int:
         import asyncio
 
         from kaos.cli.subscriptions import add_subscription
-        from kaos.domain.subscription import CHANNEL, FORUM
+        from kaos.domain.subscription import CHANNEL, FORUM, GITHUB
 
+        if a.github:
+            kind = GITHUB
+        elif a.channel:
+            kind = CHANNEL
+        else:
+            kind = FORUM
         return asyncio.run(
             add_subscription(
                 a.channel_id,
-                kind=CHANNEL if a.channel else FORUM,
+                kind=kind,
                 guild_id=a.guild,
                 resume_thread_id=a.resume_thread,
+                interval_seconds=a.every,
             )
         )
     elif a.cmd == "unsubscribe":

@@ -68,6 +68,35 @@ def test_run_builds_transcript_prompt() -> None:
     assert llm.calls[0][0].role == "system"
 
 
+def test_extra_instructions_augment_system_prompt() -> None:
+    from kaos.plugins.agents.resume_agent import SYSTEM_PROMPT
+
+    llm = EchoLLMProvider()
+    extra = "enfocate en montos y bloqueantes"
+    agent = ResumeAgent(llm, extra_instructions=extra)
+    context = Context(workspace="w1", events=(_message("ana", "hola"), _completed()))
+
+    asyncio.run(agent.run(context))
+
+    system = llm.calls[0][0]
+    assert system.role == "system"
+    # The base prompt is preserved and the user instructions are appended.
+    assert SYSTEM_PROMPT in system.content
+    assert extra in system.content
+
+
+def test_no_extra_instructions_keeps_base_prompt_unchanged() -> None:
+    from kaos.plugins.agents.resume_agent import SYSTEM_PROMPT
+
+    llm = EchoLLMProvider()
+    agent = ResumeAgent(llm)
+    context = Context(workspace="w1", events=(_message("ana", "hola"), _completed()))
+
+    asyncio.run(agent.run(context))
+
+    assert llm.calls[0][0].content == SYSTEM_PROMPT
+
+
 def test_transcript_prefixes_timestamp_when_present() -> None:
     llm = EchoLLMProvider()  # echoes the transcript back as the "summary"
     agent = ResumeAgent(llm)

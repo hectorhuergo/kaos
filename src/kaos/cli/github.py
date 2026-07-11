@@ -27,12 +27,14 @@ async def run_github(
     include_issues: bool = True,
     settings: Settings | None = None,
     publisher: Publisher | None = None,
+    extra_instructions: str = "",
 ) -> int:
     """Summarize a repository's recent activity and publish (or print) it.
 
     When ``publisher`` is provided it is used instead of the configured one
     (e.g. a capturing publisher for a web-console dry-run preview), so nothing is
-    sent to Discord regardless of the environment.
+    sent to Discord regardless of the environment. ``extra_instructions`` augment
+    the Resume Agent's prompt (focus/tone) without changing its structure.
     """
     settings = await load_settings(settings)
     target = repo or settings.github_repo
@@ -54,7 +56,7 @@ async def run_github(
     storage = InMemoryStorage() if dry_run else build_storage(settings)
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(GitHubConnector(source, repo=target, emit_completed=True))
-    runtime.register_agent(ResumeAgent(llm))
+    runtime.register_agent(ResumeAgent(llm, extra_instructions=extra_instructions))
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     )

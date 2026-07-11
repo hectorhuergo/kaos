@@ -15,7 +15,7 @@ from datetime import datetime
 
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.event import utcnow
-from kaos.core.knowledge import KnowledgeGraph
+from kaos.core.knowledge import KnowledgeGraph, group_artifacts
 
 _STYLE = """
 :root{color-scheme:light dark}
@@ -33,9 +33,28 @@ pre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0;line-
 .graph{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem;overflow:auto;max-height:78vh}
 .mermaid{min-width:max-content}
 .mermaid svg{max-width:none !important;height:auto}
+.ver-nav{display:flex;align-items:center;gap:.6rem;margin:.1rem 0 .7rem}
+.ver-btn{background:#0f1115;border:1px solid #2f3646;color:#e6e6e6;border-radius:6px;padding:.15rem .55rem;cursor:pointer;font-size:.9rem}
+.ver-btn:hover{border-color:#4f8cff}
+.ver-label{color:#8a93a2;font-size:.82rem}
+.version[hidden]{display:none}
 """
 
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
+
+_SCRIPT = """
+function verNav(btn, dir){
+  var card = btn.closest('.card');
+  var vs = Array.prototype.slice.call(card.querySelectorAll('.version'));
+  var cur = vs.findIndex(function(v){ return !v.hidden; });
+  vs[cur].hidden = true;
+  cur = (cur + dir + vs.length) % vs.length;
+  vs[cur].hidden = false;
+  var v = vs[cur];
+  card.querySelector('.ver-label').textContent =
+    (cur + 1) + ' / ' + vs.length + ' · 🤖 ' + (v.dataset.model || '—') + ' · ' + v.dataset.date;
+}
+"""
 
 
 def render_dashboard(
@@ -45,13 +64,21 @@ def render_dashboard(
     title: str = "KAOS — Conocimiento",
     generated_at: datetime | None = None,
 ) -> str:
-    """Render a self-contained HTML dashboard for the given knowledge."""
+    """Render a self-contained HTML dashboard for the given knowledge.
+
+    Artifacts that describe the same logical node (e.g. the same thread
+    summarized by two different models) are grouped into a single, navigable card
+    — arrows switch between versions, showing the model and date of each.
+    """
     when = (generated_at or utcnow()).isoformat(timespec="seconds")
     total = sum(len(arts) for _, arts in artifacts_by_workspace)
 
     sections: list[str] = []
     for workspace, artifacts in artifacts_by_workspace:
-        cards = "\n".join(_card(a) for a in artifacts) or "<p class='meta'>(sin artifacts)</p>"
+        groups = group_artifacts(list(artifacts))
+        cards = "\n".join(_card_group(g) for g in groups) or (
+            "<p class='meta'>(sin artifacts)</p>"
+        )
         sections.append(
             f"<section><h2>{html.escape(workspace)}</h2>\n{cards}</section>"
         )
@@ -81,16 +108,21 @@ def render_dashboard(
 <script>
   mermaid.initialize({{ startOnLoad: true, theme: "dark", securityLevel: "loose" }});
 </script>
+<script>{_SCRIPT}</script>
 </body>
 </html>
 """
 
 
-def _card(artifact: Artifact) -> str:
-    """Render one artifact as an HTML card."""
-    title = artifact.metadata.get("thread_name") or (
-        "📊 Estado del Proyecto" if artifact.kind == "project.status" else artifact.kind
+def _artifact_title(artifact: Artifact) -> str:
+    return str(
+        artifact.metadata.get("thread_name")
+        or ("📊 Estado del Proyecto" if artifact.kind == "project.status" else artifact.kind)
     )
+
+
+def _version_body(artifact: Artifact, *, hidden: bool) -> str:
+    """Render one version (tags + summary) inside a grouped card."""
     tags = [f"<span>{html.escape(str(artifact.produced_by))}</span>"]
     model = artifact.metadata.get("model")
     if model:
@@ -98,12 +130,46 @@ def _card(artifact: Artifact) -> str:
     count = artifact.content.get("message_count")
     if count is not None:
         tags.append(f"<span>{html.escape(str(count))} mensajes</span>")
-    tags.append(f"<span>{html.escape(artifact.timestamp.isoformat(timespec='seconds'))}</span>")
+    date = artifact.timestamp.isoformat(timespec="seconds")
+    tags.append(f"<span>{html.escape(date)}</span>")
 
     summary = html.escape(str(artifact.content.get("summary", "")))
+    hide = " hidden" if hidden else ""
     return (
-        f"<div class='card'><h3>{html.escape(str(title))}</h3>"
+        f"<div class='version'{hide} data-model='{html.escape(str(model or '—'))}' "
+        f"data-date='{html.escape(date)}'>"
         f"<div class='tags'>{''.join(tags)}</div>"
         f"<pre>{summary}</pre></div>"
     )
+
+
+def _card_group(artifacts: Sequence[Artifact]) -> str:
+    """Render a node's artifacts as one card; multiple versions become a carousel.
+
+    ``artifacts`` are the versions of the same logical node, newest first.
+    """
+    first = artifacts[0]
+    title = _artifact_title(first)
+    n = len(artifacts)
+
+    nav = ""
+    if n > 1:
+        model = html.escape(str(first.metadata.get("model") or "—"))
+        date = html.escape(first.timestamp.isoformat(timespec="seconds"))
+        nav = (
+            "<div class='ver-nav'>"
+            "<button class='ver-btn' onclick='verNav(this,-1)'>◀</button>"
+            f"<span class='ver-label'>1 / {n} · 🤖 {model} · {date}</span>"
+            "<button class='ver-btn' onclick='verNav(this,1)'>▶</button>"
+            "</div>"
+        )
+
+    versions = "".join(
+        _version_body(a, hidden=(i != 0)) for i, a in enumerate(artifacts)
+    )
+    return (
+        f"<div class='card'><h3>{html.escape(title)}</h3>"
+        f"{nav}<div class='versions'>{versions}</div></div>"
+    )
+
 

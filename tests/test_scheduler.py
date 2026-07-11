@@ -95,3 +95,41 @@ def test_rejects_invalid_arguments() -> None:
 async def _no_sleep(_seconds: float) -> None:
     return None
 
+
+def _sub(channel_id: str, interval_seconds: int | None = None):  # type: ignore[no-untyped-def]
+    from kaos.domain.subscription import Subscription
+
+    return Subscription(
+        workspace=f"discord:{channel_id}",
+        channel_id=channel_id,
+        interval_seconds=interval_seconds,
+    )
+
+
+def test_due_runs_everything_on_first_pass() -> None:
+    from kaos.cli.schedule import due_subscriptions
+
+    subs = [_sub("a", 3600), _sub("b", None)]
+    due = due_subscriptions(subs, now=1000.0, last_run={}, base_interval=900.0)
+    assert due == {"a", "b"}  # never run yet → all due
+
+
+def test_due_respects_per_subscription_interval() -> None:
+    from kaos.cli.schedule import due_subscriptions
+
+    subs = [_sub("fast", 300), _sub("slow", 3600)]
+    last_run = {"fast": 1000.0, "slow": 1000.0}
+    # 400s later: only the 300s one is due; the 3600s one is not.
+    due = due_subscriptions(subs, now=1400.0, last_run=last_run, base_interval=900.0)
+    assert due == {"fast"}
+
+
+def test_due_falls_back_to_base_interval_when_unset() -> None:
+    from kaos.cli.schedule import due_subscriptions
+
+    subs = [_sub("x", None)]
+    last_run = {"x": 1000.0}
+    assert due_subscriptions(subs, now=1500.0, last_run=last_run, base_interval=900.0) == set()
+    assert due_subscriptions(subs, now=1950.0, last_run=last_run, base_interval=900.0) == {"x"}
+
+

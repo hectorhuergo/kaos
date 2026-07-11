@@ -52,9 +52,12 @@ CREATE TABLE IF NOT EXISTS kaos_subscriptions (
     guild_id text,
     resume_thread_id text,
     active boolean NOT NULL DEFAULT true,
+    interval_seconds integer,
     created_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_kaos_subscriptions_active ON kaos_subscriptions (active);
+-- Backward-compatible migration for databases created before the plan column.
+ALTER TABLE kaos_subscriptions ADD COLUMN IF NOT EXISTS interval_seconds integer;
 """
 
 _RUNTIME_CONFIG_SCHEMA = """
@@ -208,14 +211,15 @@ class PostgresSubscriptionStore:
             """
             INSERT INTO kaos_subscriptions
                 (id, workspace, kind, channel_id, guild_id, resume_thread_id,
-                 active, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 active, interval_seconds, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (channel_id) DO UPDATE SET
                 workspace = EXCLUDED.workspace,
                 kind = EXCLUDED.kind,
                 guild_id = EXCLUDED.guild_id,
                 resume_thread_id = EXCLUDED.resume_thread_id,
-                active = EXCLUDED.active
+                active = EXCLUDED.active,
+                interval_seconds = EXCLUDED.interval_seconds
             """,
             subscription.id,
             subscription.workspace,
@@ -224,6 +228,7 @@ class PostgresSubscriptionStore:
             subscription.guild_id,
             subscription.resume_thread_id,
             subscription.active,
+            subscription.interval_seconds,
             subscription.created_at,
         )
 
@@ -267,6 +272,7 @@ class PostgresSubscriptionStore:
             guild_id=row["guild_id"],
             resume_thread_id=row["resume_thread_id"],
             active=row["active"],
+            interval_seconds=row["interval_seconds"],
             created_at=row["created_at"],
         )
 

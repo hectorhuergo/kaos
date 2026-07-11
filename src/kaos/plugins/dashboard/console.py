@@ -70,9 +70,34 @@ function tab(name){
   $$('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab===name));
   $$('.tab').forEach(t => t.classList.toggle('active', t.id==='tab-'+name));
   if(name==='providers') loadProviders();
+  if(name==='agents') loadAgents();
   if(name==='subscriptions') loadSubscriptions();
   if(name==='dashboards') loadDashboards();
   if(name==='preview') loadPreview();
+}
+
+// ---- Agents ----
+// Extra instructions are kept per-agent (by id). The summary pipeline (preview
+// and run) consumes the resume-agent's, augmenting its prompt.
+function agentExtra(id='resume-agent'){ const el = $('#agent-extra-'+id); return el ? el.value.trim() : ''; }
+async function loadAgents(){
+  const box = $('#agents'); box.innerHTML = '<p class="muted">Cargando…</p>';
+  try{
+    const d = await api('/api/agents');
+    box.innerHTML = d.agents.map(a => `
+      <div class="card">
+        <div class="row">
+          <div class="grow"><strong>${a.label}</strong> <span class="muted">${a.id}</span>
+            <div class="muted">${a.description}</div>
+            <div class="muted">produce: <code>${a.produces}</code> · disparo: <code>${a.trigger}</code></div>
+          </div>
+          ${a.augmentable?'<span class="pill ok">prompt aumentable</span>':'<span class="pill">prompt fijo</span>'}
+        </div>
+        ${a.augmentable?`<label for="agent-extra-${a.id}">Prompt extra para ${esc(a.label)}</label>
+          <textarea id="agent-extra-${a.id}" rows="3" style="width:100%;background:#0f1115;border:1px solid #2f3646;border-radius:8px;color:#e6e6e6;padding:.5rem .6rem;font-size:.95rem" placeholder="p. ej.: enfocate en decisiones técnicas y montos; tono formal."></textarea>
+          ${a.id==='resume-agent'?'<div class="muted" style="margin-top:.3rem">Se aplica al generar Vista previa o Ejecutar.</div>':'<div class="muted" style="margin-top:.3rem">Se aplicará cuando se ejecute este agente.</div>'}`:''}
+      </div>`).join('');
+  }catch(e){ box.innerHTML = `<p class="muted">Error: ${e.message}</p>`; }
 }
 
 // ---- Providers ----
@@ -155,25 +180,27 @@ async function loadSubscriptions(){
     box.innerHTML = d.subscriptions.map(s => `
       <div class="card"><div class="row">
         <div class="grow"><strong>${s.kind}</strong> · <code>${s.channel_id}</code>
-          <div class="muted">workspace: ${s.workspace} · guild: ${s.guild_id||'-'} · resume: ${s.resume_thread_id||'-'}</div>
+          <div class="muted">workspace: ${s.workspace} · guild: ${s.guild_id||'-'} · resume: ${s.resume_thread_id||'-'} · plan: ${s.interval_seconds?('cada '+s.interval_seconds+'s'):'cada pasada'}</div>
         </div>
         <button class="act danger" onclick="removeSub('${s.channel_id}')">Quitar</button>
       </div></div>`).join('');
   }catch(e){ box.innerHTML = `<p class="muted">Error: ${e.message}</p>`; }
 }
 async function addSub(){
+  const every = parseInt($('#sub-every').value, 10);
   const body = {
     channel_id: $('#sub-channel').value.trim(),
     kind: $('#sub-kind').value,
     guild_id: $('#sub-guild').value.trim() || null,
     resume_thread_id: $('#sub-resume').value.trim() || null,
+    interval_seconds: Number.isFinite(every) && every > 0 ? every : null,
   };
   if(!body.channel_id){ toast('Falta channel_id', false); return; }
   try{
     await api('/api/subscriptions', {method:'POST', headers:{'content-type':'application/json'},
       body: JSON.stringify(body)});
     toast('Suscripción guardada');
-    $('#sub-channel').value=''; $('#sub-guild').value=''; $('#sub-resume').value='';
+    $('#sub-channel').value=''; $('#sub-guild').value=''; $('#sub-resume').value=''; $('#sub-every').value='';
     loadSubscriptions();
   }catch(e){ toast(e.message, false); }
 }
@@ -233,14 +260,38 @@ function previewSubscription(){
   const channel_id = $('#pv-sub').value;
   if(!channel_id){ toast('No hay suscripción para previsualizar', false); return; }
   runPreview(api('/api/preview/subscription', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({channel_id})}));
+    body: JSON.stringify({channel_id, extra_instructions: agentExtra()})}));
+}
+function runSubscription(){
+  const channel_id = $('#pv-sub').value;
+  if(!channel_id){ toast('No hay suscripción para ejecutar', false); return; }
+  const body = {channel_id, force: $('#pv-force').checked, publish: $('#pv-publish').checked, extra_instructions: agentExtra()};
+  execRun('/api/run/subscription', body);
+}
+function runAll(){
+  const body = {force: $('#pv-force').checked, publish: $('#pv-publish').checked, extra_instructions: agentExtra()};
+  execRun('/api/run/all', body);
+}
+function execRun(path, body){
+  const out = $('#pv-out');
+  const verb = body.publish ? 'Ejecutando y publicando' : 'Ejecutando';
+  out.innerHTML = `<p class="spin">⏳ ${verb}… genera resúmenes y llena la cache${body.publish?' y publica en Discord':' (no publica)'}</p>`;
+  api(path, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)})
+    .then(data => {
+      renderPreview(data);
+      const note = data.published ? '✔ persistido · cache actualizada · publicado en Discord'
+                                  : '✔ persistido · cache actualizada · no se publicó';
+      out.innerHTML = `<div class="pill ok" style="margin-bottom:.6rem">${note}</div>` + out.innerHTML;
+      toast('Corrida completa');
+    })
+    .catch(e => { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; });
 }
 function previewGithub(){
   const repo = $('#pv-repo').value.trim();
   if(!repo){ toast('Escribí owner/repo', false); return; }
   const limit = parseInt($('#pv-limit').value, 10) || 30;
   runPreview(api('/api/preview/github', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({repo, limit})}));
+    body: JSON.stringify({repo, limit, extra_instructions: agentExtra()})}));
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -267,6 +318,7 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
 </header>
 <nav>
   <button data-tab="providers">Providers</button>
+  <button data-tab="agents">Agentes</button>
   <button data-tab="subscriptions">Subscriptions</button>
   <button data-tab="preview">Vista previa</button>
   <button data-tab="dashboards">Dashboards</button>
@@ -290,18 +342,28 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
     <div id="providers"></div>
   </section>
 
-  <section id="tab-subscriptions" class="tab">
-    <h2>Nueva suscripción</h2>
+  <section id="tab-agents" class="tab">
+    <h2>Agentes disponibles</h2>
+    <p class="muted">Los agentes son plugins que transforman contexto en conocimiento.
+      Cada agente <strong>aumentable</strong> tiene su propio campo de prompt extra
+      (foco/tono), sin cambiar la estructura de su salida. El del Resume Agent se
+      aplica en <a href="#" onclick="tab('preview');return false">Vista previa</a> y al Ejecutar.</p>
+    <div id="agents"></div>
+  </section>
+
+  <section id="tab-subscriptions" class="tab">    <h2>Nueva suscripción</h2>
     <div class="card">
       <div class="grid">
-        <div><label for="sub-channel">Channel / Forum id</label>
-          <input id="sub-channel" placeholder="123456789"></div>
+        <div><label for="sub-channel">Channel / Forum id · GitHub owner/repo</label>
+          <input id="sub-channel" placeholder="123456789 · owner/repo"></div>
         <div><label for="sub-kind">Tipo</label>
-          <select id="sub-kind"><option value="forum">forum</option><option value="channel">channel</option></select></div>
+          <select id="sub-kind"><option value="forum">forum</option><option value="channel">channel</option><option value="github">github</option></select></div>
         <div><label for="sub-guild">Guild id (opcional)</label>
           <input id="sub-guild" placeholder="hereda de .env"></div>
         <div><label for="sub-resume">Resume thread id (opcional)</label>
           <input id="sub-resume" placeholder="PMO"></div>
+        <div><label for="sub-every">Plan: cada N segundos (opcional)</label>
+          <input id="sub-every" type="number" min="1" placeholder="ej. 3600 (vacío = cada pasada)"></div>
       </div>
       <div class="row" style="margin-top:1rem">
         <button class="act" onclick="addSub()">Suscribir</button>
@@ -319,9 +381,22 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
       <div class="grid">
         <div><label for="pv-sub">Suscripción</label>
           <select id="pv-sub"></select></div>
-        <div style="display:flex;align-items:flex-end">
-          <button class="act" onclick="previewSubscription()">Previsualizar suscripción</button></div>
+        <div style="display:flex;align-items:flex-end;gap:.6rem;flex-wrap:wrap">
+          <button class="act ghost" onclick="previewSubscription()">Previsualizar (no persiste)</button>
+          <button class="act" onclick="runSubscription()">Ejecutar (persistir + cache)</button>
+          <button class="act ghost" onclick="runAll()">Ejecutar todas</button>
+        </div>
       </div>
+      <label class="row" style="margin-top:.6rem;color:#8a93a2;font-size:.85rem">
+        <input type="checkbox" id="pv-force" style="width:auto;margin-right:.4rem">
+        Forzar re-resumen (ignora la cache)
+      </label>
+      <label class="row" style="margin-top:.2rem;color:#8a93a2;font-size:.85rem">
+        <input type="checkbox" id="pv-publish" style="width:auto;margin-right:.4rem">
+        Publicar en Discord (por defecto solo persiste)
+      </label>
+      <div class="muted">«Ejecutar» corre el pipeline real: guarda los resúmenes y llena la cache
+        de conocimiento. Sin «Publicar», <strong>no se envía a Discord</strong>. «Previsualizar» solo muestra.</div>
     </div>
     <div class="card">
       <div class="grid">

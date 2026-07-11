@@ -12,6 +12,7 @@ Routes:
 - ``GET  /api/workspaces``           → the workspaces KAOS manages.
 - ``GET  /api/knowledge``            → the knowledge graph as JSON.
 - ``GET  /api/artifacts``            → the stored artifacts (optionally by ws).
+- ``GET  /api/agents``               → the catalog of agents KAOS ships.
 - ``GET  /api/providers``            → LLM provider catalog + persisted choice.
 - ``PUT  /api/config/provider``      → persist the active provider + model.
 - ``PUT  /api/providers/{id}/credential`` → persist a provider's secret.
@@ -21,6 +22,8 @@ Routes:
 - ``DELETE /api/subscriptions/{id}`` → deactivate a subscription.
 - ``POST /api/preview/github``       → dry-run summary of a repo (no publish).
 - ``POST /api/preview/subscription`` → dry-run summary of a subscription.
+- ``POST /api/run/subscription``     → real run: persist + populate cache (optional publish).
+- ``POST /api/run/all``              → real run of every active subscription.
 
 Mutating routes edit durable state: the runtime config, provider credentials and
 the subscriptions. Provider secrets can be persisted in PostgreSQL (with the
@@ -39,13 +42,15 @@ from kaos.bootstrap.factory import (
     build_storage,
     build_subscription_store,
 )
+from kaos.core.agents import agent_catalog
 from kaos.core.config import LLM_PROVIDERS, Settings
 from kaos.core.providers import provider_status, secret_field
 from kaos.domain.provider_credential import ProviderCredential
 from kaos.domain.runtime_config import RuntimeConfig
-from kaos.domain.subscription import KINDS, Subscription
+from kaos.domain.subscription import GITHUB, KINDS, Subscription
 from kaos.plugins.dashboard import render_dashboard
 from kaos.plugins.dashboard.console import render_console
+from kaos.plugins.dashboard.execute import RunError, run_all, run_subscription
 from kaos.plugins.dashboard.preview import (
     PreviewError,
     preview_github,
@@ -74,12 +79,31 @@ class GitHubPreviewInput(BaseModel):
 
     repo: str
     limit: int = 30
+    extra_instructions: str = ""
 
 
 class SubscriptionPreviewInput(BaseModel):
     """Request body: a subscription to preview (dry-run, no publish)."""
 
     channel_id: str
+    extra_instructions: str = ""
+
+
+class SubscriptionRunInput(BaseModel):
+    """Request body: a subscription to run for real (persist + cache)."""
+
+    channel_id: str
+    force: bool = False
+    publish: bool = False
+    extra_instructions: str = ""
+
+
+class RunAllInput(BaseModel):
+    """Request body: run every active subscription (persist + cache)."""
+
+    force: bool = False
+    publish: bool = False
+    extra_instructions: str = ""
 
 
 class SubscriptionInput(BaseModel):
@@ -89,6 +113,7 @@ class SubscriptionInput(BaseModel):
     kind: str = "forum"
     guild_id: str | None = None
     resume_thread_id: str | None = None
+    interval_seconds: int | None = None
 
 
 async def _close(obj: object) -> None:
@@ -222,6 +247,22 @@ def create_app(
 
     # ---- Providers (persisted runtime config) ----
 
+    @app.get("/api/agents")
+    async def api_agents() -> dict[str, Any]:
+        return {
+            "agents": [
+                {
+                    "id": a.id,
+                    "label": a.label,
+                    "description": a.description,
+                    "produces": a.produces,
+                    "trigger": a.trigger,
+                    "augmentable": a.augmentable,
+                }
+                for a in agent_catalog()
+            ]
+        }
+
     @app.get("/api/providers")
     async def api_providers() -> dict[str, Any]:
         persisted = await _config().get()
@@ -315,6 +356,7 @@ def create_app(
                     "channel_id": s.channel_id,
                     "guild_id": s.guild_id,
                     "resume_thread_id": s.resume_thread_id,
+                    "interval_seconds": s.interval_seconds,
                     "active": s.active,
                     "created_at": s.created_at.isoformat(),
                 }
@@ -328,12 +370,17 @@ def create_app(
             raise HTTPException(status_code=422, detail=f"kind must be one of {KINDS}")
         if not sub.channel_id.strip():
             raise HTTPException(status_code=422, detail="channel_id is required")
+        if sub.kind == GITHUB and "/" not in sub.channel_id:
+            raise HTTPException(
+                status_code=422, detail="a GitHub repo must be 'owner/name'"
+            )
         subscription = Subscription(
-            workspace=Subscription.workspace_for(sub.channel_id),
+            workspace=Subscription.workspace_for_kind(sub.kind, sub.channel_id),
             kind=sub.kind,
             channel_id=sub.channel_id,
             guild_id=sub.guild_id or cfg.discord_guild_id,
             resume_thread_id=sub.resume_thread_id or cfg.discord_resume_thread_id,
+            interval_seconds=sub.interval_seconds,
         )
         await _subs().add(subscription)
         return {"channel_id": subscription.channel_id, "workspace": subscription.workspace}
@@ -352,7 +399,10 @@ def create_app(
         body: GitHubPreviewInput = Body(...),
     ) -> dict[str, Any]:
         try:
-            artifacts = await preview_github(cfg, body.repo, limit=body.limit)
+            artifacts = await preview_github(
+                cfg, body.repo, limit=body.limit,
+                extra_instructions=body.extra_instructions,
+            )
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"published": False, "artifacts": artifacts_to_dicts(artifacts)}
@@ -363,11 +413,53 @@ def create_app(
     ) -> dict[str, Any]:
         try:
             artifacts = await preview_subscription(
-                cfg, body.channel_id, subscription_store=_subs()
+                cfg, body.channel_id, subscription_store=_subs(),
+                extra_instructions=body.extra_instructions,
             )
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"published": False, "artifacts": artifacts_to_dicts(artifacts)}
+
+    # ---- Interactive run (persist + populate cache; does NOT publish) ----
+
+    @app.post("/api/run/subscription")
+    async def api_run_subscription(
+        body: SubscriptionRunInput = Body(...),
+    ) -> dict[str, Any]:
+        try:
+            artifacts = await run_subscription(
+                cfg,
+                body.channel_id,
+                subscription_store=_subs(),
+                force=body.force,
+                publish=body.publish,
+                extra_instructions=body.extra_instructions,
+            )
+        except RunError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "persisted": True,
+            "published": body.publish,
+            "artifacts": artifacts_to_dicts(artifacts),
+        }
+
+    @app.post("/api/run/all")
+    async def api_run_all(body: RunAllInput = Body(...)) -> dict[str, Any]:
+        try:
+            artifacts = await run_all(
+                cfg,
+                subscription_store=_subs(),
+                force=body.force,
+                publish=body.publish,
+                extra_instructions=body.extra_instructions,
+            )
+        except RunError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "persisted": True,
+            "published": body.publish,
+            "artifacts": artifacts_to_dicts(artifacts),
+        }
 
     return app
 

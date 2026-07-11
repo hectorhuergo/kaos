@@ -23,7 +23,15 @@
 - [x] Dashboard estático (`kaos dashboard`, HTML autocontenido)
 - [x] Dashboard vivo (`kaos serve`, app FastAPI read-only con API JSON)
 - [x] GitHub Connector (`kaos github`, resume la actividad de un repo)
+- [x] Suscripciones a repositorios GitHub (`kaos subscribe <owner/repo> --github`)
+- [x] Consola web — vista de Agentes (`/api/agents`) + prompt aumentable del Resume Agent
+- [x] Scheduler como app (`docker compose --profile app up`, servicios `scheduler`/`dashboard`)
+- [ ] Lectura general de Git (integración del trabajo de Maxi)
 - [ ] Odoo Connector
 - [ ] Multi-workspace
+
+## Integraciones futuras
+- [ ] Integración con el sistema de usuarios de **proyecto-x-grid**
+      (autenticación/identidad compartida para autores, permisos y multi-tenant)
 
 

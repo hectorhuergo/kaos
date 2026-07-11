@@ -8,10 +8,53 @@ hit the LLM again.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from kaos.bootstrap.factory import build_subscription_store
 from kaos.cli.backfill import run_backfill, run_forum_backfill
+from kaos.cli.github import run_github
 from kaos.core.config import Settings
-from kaos.domain.subscription import FORUM, KINDS, Subscription
+from kaos.domain.subscription import CHANNEL, FORUM, GITHUB, KINDS, Subscription
+
+# A subscription runner turns one active subscription into a summarization run.
+# Registering a kind here (instead of an ``if/elif`` chain) keeps the dispatch
+# open for extension: a new source kind only needs its own runner, without
+# touching ``run_subscriptions`` — the subscription loop stays agnostic of the
+# concrete connector behind each kind.
+SubscriptionRunner = Callable[..., Awaitable[int]]
+
+
+async def _run_forum(
+    sub: Subscription, *, dry_run: bool, consolidated: bool, force: bool, settings: Settings
+) -> int:
+    return await run_forum_backfill(
+        sub.channel_id,
+        guild_id=sub.guild_id,
+        dry_run=dry_run,
+        consolidated=consolidated,
+        force=force,
+        only_if_changed=True,
+        settings=settings,
+    )
+
+
+async def _run_channel(
+    sub: Subscription, *, dry_run: bool, consolidated: bool, force: bool, settings: Settings
+) -> int:
+    return await run_backfill(sub.channel_id, dry_run=dry_run, settings=settings)
+
+
+async def _run_github(
+    sub: Subscription, *, dry_run: bool, consolidated: bool, force: bool, settings: Settings
+) -> int:
+    return await run_github(sub.channel_id, dry_run=dry_run, settings=settings)
+
+
+SUBSCRIPTION_RUNNERS: dict[str, SubscriptionRunner] = {
+    FORUM: _run_forum,
+    CHANNEL: _run_channel,
+    GITHUB: _run_github,
+}
 
 
 async def _close(store: object) -> None:
@@ -26,20 +69,30 @@ async def add_subscription(
     kind: str = FORUM,
     guild_id: str | None = None,
     resume_thread_id: str | None = None,
+    interval_seconds: int | None = None,
     settings: Settings | None = None,
 ) -> int:
-    """Persist a subscription to a forum/channel."""
+    """Persist a subscription to a forum/channel (Discord) or repo (GitHub).
+
+    For ``kind == 'github'`` ``channel_id`` is the repository slug ``owner/name``.
+    ``interval_seconds`` sets the execution plan (how often the scheduler runs
+    it); ``None`` means it runs on every scheduler pass.
+    """
     if kind not in KINDS:
         print(f"error: kind must be one of {KINDS}, got '{kind}'")
+        return 1
+    if kind == GITHUB and "/" not in channel_id:
+        print(f"error: un repo de GitHub debe ser 'owner/name', got '{channel_id}'")
         return 1
     settings = settings if settings is not None else Settings.from_env()
     store = build_subscription_store(settings)
     subscription = Subscription(
-        workspace=Subscription.workspace_for(channel_id),
+        workspace=Subscription.workspace_for_kind(kind, channel_id),
         kind=kind,
         channel_id=channel_id,
         guild_id=guild_id or settings.discord_guild_id,
         resume_thread_id=resume_thread_id or settings.discord_resume_thread_id,
+        interval_seconds=interval_seconds,
     )
     try:
         await store.add(subscription)
@@ -89,15 +142,24 @@ async def run_subscriptions(
     dry_run: bool = False,
     consolidated: bool = False,
     force: bool = False,
+    only: set[str] | None = None,
     settings: Settings | None = None,
 ) -> int:
-    """Summarize every active subscription."""
+    """Summarize the active subscriptions.
+
+    ``only`` restricts the run to a set of ``channel_id``s (used by the scheduler
+    to run just the subscriptions whose execution plan is due); by default every
+    active subscription runs.
+    """
     settings = settings if settings is not None else Settings.from_env()
     store = build_subscription_store(settings)
     try:
         subscriptions = await store.list(active_only=True)
     finally:
         await _close(store)
+
+    if only is not None:
+        subscriptions = [s for s in subscriptions if s.channel_id in only]
 
     if not subscriptions:
         print("(sin suscripciones activas)")
@@ -115,20 +177,14 @@ async def run_subscriptions(
             }
         )
         print(f"=== {sub.kind} {sub.channel_id} ===")
-        if sub.kind == FORUM:
-            rc = await run_forum_backfill(
-                sub.channel_id,
-                guild_id=sub.guild_id,
-                dry_run=dry_run,
-                consolidated=consolidated,
-                force=force,
-                only_if_changed=True,
-                settings=sub_settings,
-            )
-        else:
-            rc = await run_backfill(
-                sub.channel_id, dry_run=dry_run, settings=sub_settings
-            )
+        runner = SUBSCRIPTION_RUNNERS.get(sub.kind, _run_channel)
+        rc = await runner(
+            sub,
+            dry_run=dry_run,
+            consolidated=consolidated,
+            force=force,
+            settings=sub_settings,
+        )
         exit_code = exit_code or rc
     return exit_code
 

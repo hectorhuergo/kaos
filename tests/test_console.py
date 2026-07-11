@@ -246,7 +246,7 @@ def test_capturing_publisher_collects() -> None:
 def test_preview_github_route_captures(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from kaos.contracts.artifact import Artifact
 
-    async def fake_run_github(repo, *, dry_run, limit, settings, publisher):  # type: ignore[no-untyped-def]
+    async def fake_run_github(repo, *, dry_run, limit, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
         assert dry_run is True  # never publishes for real
         await publisher.publish(
             Artifact(
@@ -274,7 +274,7 @@ def test_preview_github_rejects_empty_repo(client: TestClient) -> None:
 def test_preview_github_network_error_is_422(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import httpx
 
-    async def boom(repo, *, dry_run, limit, settings, publisher):  # type: ignore[no-untyped-def]
+    async def boom(repo, *, dry_run, limit, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr("kaos.plugins.dashboard.preview.run_github", boom)
@@ -287,7 +287,7 @@ def test_preview_github_network_error_is_422(client: TestClient, monkeypatch) ->
 def test_preview_github_timeout_is_422_retriable(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import httpx
 
-    async def slow(repo, *, dry_run, limit, settings, publisher):  # type: ignore[no-untyped-def]
+    async def slow(repo, *, dry_run, limit, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
         raise httpx.ReadTimeout("too slow")
 
     monkeypatch.setattr("kaos.plugins.dashboard.preview.run_github", slow)
@@ -308,7 +308,7 @@ def test_preview_subscription_route_captures(
 
     client.post("/api/subscriptions", json={"channel_id": "123", "kind": "forum"})
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
         assert dry_run is True and consolidated is True
         await publisher.publish(
             Artifact(
@@ -326,5 +326,78 @@ def test_preview_subscription_route_captures(
     body = resp.json()
     assert body["published"] is False
     assert body["artifacts"][0]["content"]["summary"] == "# Estado del Proyecto"
+
+
+def test_agents_route_lists_catalog(client: TestClient) -> None:
+    resp = client.get("/api/agents")
+    assert resp.status_code == 200
+    ids = {a["id"] for a in resp.json()["agents"]}
+    assert {"resume-agent", "dev-agent"} <= ids
+
+
+def test_run_subscription_missing_is_422(client: TestClient) -> None:
+    resp = client.post("/api/run/subscription", json={"channel_id": "nope"})
+    assert resp.status_code == 422
+
+
+def test_run_subscription_route_persists(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from kaos.contracts.artifact import Artifact
+
+    client.post("/api/subscriptions", json={"channel_id": "123", "kind": "forum"})
+
+    seen: dict[str, object] = {}
+
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+        # A real run persists (not a dry-run) and captures instead of publishing.
+        seen["dry_run"] = dry_run
+        seen["force"] = force
+        await publisher.publish(
+            Artifact(
+                kind="project.status",
+                workspace=f"discord:{channel_id}",
+                produced_by="resume-agent",
+                content={"summary": "# Estado del Proyecto"},
+            )
+        )
+        return 0
+
+    monkeypatch.setattr("kaos.plugins.dashboard.execute.run_forum_backfill", fake_forum)
+    resp = client.post("/api/run/subscription", json={"channel_id": "123", "force": True})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["persisted"] is True
+    assert body["published"] is False
+    assert body["artifacts"][0]["content"]["summary"] == "# Estado del Proyecto"
+    assert seen["dry_run"] is False  # persists to real storage + cache
+    assert seen["force"] is True
+
+
+def test_run_all_route_runs_every_subscription(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from kaos.contracts.artifact import Artifact
+
+    client.post("/api/subscriptions", json={"channel_id": "a", "kind": "forum"})
+    client.post("/api/subscriptions", json={"channel_id": "b", "kind": "forum"})
+
+    ran: list[str] = []
+
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+        ran.append(channel_id)
+        await publisher.publish(
+            Artifact(
+                kind="project.status",
+                workspace=f"discord:{channel_id}",
+                produced_by="resume-agent",
+                content={"summary": f"# {channel_id}"},
+            )
+        )
+        return 0
+
+    monkeypatch.setattr("kaos.plugins.dashboard.execute.run_forum_backfill", fake_forum)
+    resp = client.post("/api/run/all", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["persisted"] is True
+    assert sorted(ran) == ["a", "b"]
+    assert len(body["artifacts"]) == 2
 
 

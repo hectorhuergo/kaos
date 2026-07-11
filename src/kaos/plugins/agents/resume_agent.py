@@ -44,8 +44,25 @@ class ResumeAgent:
 
     name = "resume-agent"
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, *, extra_instructions: str = "") -> None:
         self._llm = llm
+        self._extra_instructions = extra_instructions.strip()
+
+    def _system_prompt(self) -> str:
+        """The base prompt, optionally augmented with user instructions.
+
+        Extra instructions are appended (never replace the base prompt) so the
+        required Markdown structure is preserved while letting the user steer the
+        focus/tone of the summary from the console or CLI.
+        """
+        if not self._extra_instructions:
+            return SYSTEM_PROMPT
+        return (
+            f"{SYSTEM_PROMPT}\n\n"
+            "Instrucciones adicionales del usuario (respétalas siempre que no "
+            "contradigan el formato y las secciones pedidas):\n"
+            f"{self._extra_instructions}"
+        )
 
     @staticmethod
     def _is_message(event_type: str) -> bool:
@@ -63,7 +80,7 @@ class ResumeAgent:
 
         summary = await self._llm.complete(
             [
-                Message(role="system", content=SYSTEM_PROMPT),
+                Message(role="system", content=self._system_prompt()),
                 Message(role="user", content=self._render(messages)),
             ]
         )

@@ -122,3 +122,74 @@ def test_empty_workspaces_produce_empty_graph() -> None:
     assert graph.nodes == []
     assert graph.edges == []
 
+
+def test_build_graph_dedupes_resummaries_by_thread() -> None:
+    """Re-summarizing the same thread (e.g. another model) must not duplicate."""
+    storage = InMemoryStorage()
+
+    async def scenario() -> None:
+        older = Artifact(
+            kind="conversation.summary",
+            workspace=WS,
+            produced_by="resume-agent",
+            content={"summary": "v1", "message_count": 1},
+            metadata={"thread_name": "PMO", "model": "qwen2.5:3b"},
+        )
+        await storage.save_artifact(older)
+        newer = Artifact(
+            kind="conversation.summary",
+            workspace=WS,
+            produced_by="resume-agent",
+            content={"summary": "v2", "message_count": 1},
+            metadata={"thread_name": "PMO", "model": "llama3.2:3b"},
+            timestamp=older.timestamp,
+        )
+        # Ensure the second one is strictly newer.
+        newer = newer.model_copy(update={"timestamp": _later(older.timestamp)})
+        await storage.save_artifact(newer)
+
+    asyncio.run(scenario())
+
+    deduped = asyncio.run(build_graph(storage, [WS]))
+    artifacts = [n for n in deduped.nodes if n.kind == ARTIFACT]
+    assert len(artifacts) == 1
+    assert artifacts[0].meta["model"] == "llama3.2:3b"  # kept the latest
+
+    full = asyncio.run(build_graph(storage, [WS], dedupe=False))
+    assert len([n for n in full.nodes if n.kind == ARTIFACT]) == 2
+
+
+def _later(ts: object) -> object:
+    from datetime import timedelta
+
+    return ts + timedelta(seconds=1)  # type: ignore[operator]
+
+
+def test_group_artifacts_groups_by_subject_newest_first() -> None:
+    from kaos.core.knowledge import group_artifacts
+
+    a1 = Artifact(
+        kind="conversation.summary",
+        workspace=WS,
+        produced_by="resume-agent",
+        content={"summary": "old"},
+        metadata={"thread_name": "T", "model": "m1"},
+    )
+    a2 = a1.model_copy(
+        update={"content": {"summary": "new"}, "metadata": {"thread_name": "T", "model": "m2"},
+                "timestamp": _later(a1.timestamp)}
+    )
+    other = Artifact(
+        kind="conversation.summary",
+        workspace=WS,
+        produced_by="resume-agent",
+        content={"summary": "x"},
+        metadata={"thread_name": "U"},
+    )
+
+    groups = group_artifacts([a1, a2, other])
+    assert len(groups) == 2  # two subjects: T and U
+    thread_t = next(g for g in groups if g[0].metadata.get("thread_name") == "T")
+    assert [a.metadata["model"] for a in thread_t] == ["m2", "m1"]  # newest first
+
+

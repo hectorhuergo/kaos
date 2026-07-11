@@ -198,6 +198,7 @@ debe gestionar. Las suscripciones persisten en la base de datos
 
 ```bash
 kaos subscribe <forum_channel_id> --guild <guild_id> --resume-thread <thread_id>
+kaos subscribe <owner/repo> --github        # suscribir un repositorio de GitHub
 kaos subscriptions          # listar activas
 kaos unsubscribe <forum_channel_id>
 ```

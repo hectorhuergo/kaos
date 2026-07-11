@@ -55,6 +55,42 @@ services:
     #           count: all
     #           capabilities: ["gpu"]
 
+  # ---- KAOS application services (opt-in via the "app" profile) ----
+  # Not started by a plain `docker compose up` (infra only). Enable with:
+  #   docker compose --profile app up -d --build
+  # Both read secrets/config from the repo `.env` (KAOS_DATABASE_URL should point
+  # at the `postgres` service, e.g. postgresql://kaos:kaos@postgres:5432/kaos).
+
+  # The Beta scheduler: runs active subscriptions on an interval (idempotent).
+  scheduler:
+    profiles: ["app"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["schedule"]
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The live dashboard + web console (FastAPI) — same image, different command.
+  dashboard:
+    profiles: ["app"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - ../.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

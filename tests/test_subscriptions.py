@@ -5,12 +5,25 @@ from __future__ import annotations
 import asyncio
 
 from kaos.contracts.subscription import SubscriptionStore
-from kaos.domain.subscription import CHANNEL, FORUM, Subscription
+from kaos.domain.subscription import CHANNEL, FORUM, GITHUB, KINDS, Subscription
 from kaos.runtime import InMemorySubscriptionStore
 
 
 def test_workspace_for_channel() -> None:
     assert Subscription.workspace_for("123") == "discord:123"
+
+
+def test_workspace_for_github_repo() -> None:
+    assert Subscription.workspace_for_github("owner/name") == "github:owner/name"
+
+
+def test_workspace_for_kind_dispatches_by_kind() -> None:
+    assert Subscription.workspace_for_kind(FORUM, "123") == "discord:123"
+    assert Subscription.workspace_for_kind(GITHUB, "owner/name") == "github:owner/name"
+
+
+def test_github_is_a_valid_kind() -> None:
+    assert GITHUB in KINDS
 
 
 def test_subscription_defaults_to_forum_and_active() -> None:
@@ -58,6 +71,21 @@ def test_add_is_upsert_by_channel() -> None:
         got = await store.get("1")
         assert got is not None and got.resume_thread_id == "NEW"
         assert len(await store.list()) == 1  # not duplicated
+
+    asyncio.run(scenario())
+
+
+def test_interval_seconds_defaults_to_none_and_roundtrips() -> None:
+    store = InMemorySubscriptionStore()
+
+    async def scenario() -> None:
+        plain = _sub("1")
+        assert plain.interval_seconds is None  # default: runs every scheduler pass
+        planned = _sub("2").model_copy(update={"interval_seconds": 3600})
+        await store.add(plain)
+        await store.add(planned)
+        got = await store.get("2")
+        assert got is not None and got.interval_seconds == 3600
 
     asyncio.run(scenario())
 

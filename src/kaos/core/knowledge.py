@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
+from kaos.contracts.artifact import Artifact
 from kaos.contracts.storage import Storage
 
 # Node kinds.
@@ -126,6 +127,7 @@ async def build_graph(
     *,
     include_events: bool = False,
     event_label_length: int = 60,
+    dedupe: bool = True,
 ) -> KnowledgeGraph:
     """Build a knowledge graph from the artifacts (and optionally events) stored.
 
@@ -133,6 +135,13 @@ async def build_graph(
     to the events it was derived from when ``include_events`` is set. Events are
     excluded by default because a real conversation can have hundreds of them —
     the artifact-level graph is the useful overview.
+
+    When ``dedupe`` is set (the default), only the most recent artifact per
+    logical subject (its thread, or its kind) is kept. Re-summarizing the same
+    conversation — e.g. after switching the LLM model — produces a *new*
+    artifact with a different id; keeping only the latest avoids showing the same
+    knowledge duplicated once per model/run (Knowledge before Reports: the last
+    summary supersedes the previous ones).
     """
     graph = KnowledgeGraph()
     for workspace in workspaces:
@@ -142,7 +151,11 @@ async def build_graph(
         if include_events:
             events_by_id = {str(e.id): e for e in await storage.list_events(workspace)}
 
-        for artifact in await storage.list_artifacts(workspace):
+        artifacts = list(await storage.list_artifacts(workspace))
+        if dedupe:
+            artifacts = latest_artifacts(artifacts)
+
+        for artifact in artifacts:
             aid = str(artifact.id)
             graph.add_node(
                 KnowledgeNode(
@@ -166,6 +179,59 @@ async def build_graph(
                     graph, aid, artifact.source_events, events_by_id, event_label_length
                 )
     return graph
+
+
+def latest_artifacts(artifacts: Sequence[Artifact]) -> list[Artifact]:
+    """Keep only the most recent artifact per logical subject.
+
+    The subject key is the artifact's thread (``metadata.thread_name``) when it
+    has one, otherwise its ``kind``. This collapses the duplicates produced by
+    re-summarizing the same conversation with different models/runs, keeping the
+    newest by ``timestamp``. Order is preserved (first appearance of each key).
+
+    Shared by the graph projection (:func:`build_graph`) and the artifact
+    sections rendered under it, so both views agree.
+    """
+    latest: dict[tuple[str, str], Artifact] = {}
+    order: list[tuple[str, str]] = []
+    for artifact in artifacts:
+        thread = artifact.metadata.get("thread_name")
+        key = (artifact.kind, str(thread) if thread else "")
+        current = latest.get(key)
+        if current is None:
+            latest[key] = artifact
+            order.append(key)
+        elif artifact.timestamp >= current.timestamp:
+            latest[key] = artifact
+    return [latest[key] for key in order]
+
+
+def _subject_key(artifact: Artifact) -> tuple[str, str]:
+    """The logical-subject key: its thread when present, otherwise its kind."""
+    thread = artifact.metadata.get("thread_name")
+    return (artifact.kind, str(thread) if thread else "")
+
+
+def group_artifacts(artifacts: Sequence[Artifact]) -> list[list[Artifact]]:
+    """Group artifacts by logical subject, newest first within each group.
+
+    Complements :func:`latest_artifacts`: instead of dropping the older versions
+    of a subject, it keeps them together so the view can show every version of a
+    node (e.g. the same thread summarized by two models) as a navigable card. The
+    group order follows the first appearance of each subject; within a group the
+    artifacts are sorted by ``timestamp`` descending (latest first).
+    """
+    groups: dict[tuple[str, str], list[Artifact]] = {}
+    order: list[tuple[str, str]] = []
+    for artifact in artifacts:
+        key = _subject_key(artifact)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(artifact)
+    return [
+        sorted(groups[key], key=lambda a: a.timestamp, reverse=True) for key in order
+    ]
 
 
 def _add_event_nodes(
