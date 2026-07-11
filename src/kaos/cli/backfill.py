@@ -196,7 +196,8 @@ async def run_forum_backfill(
                     continue
 
                 fingerprint = content_fingerprint(
-                    [str(e.payload.get("message_id", "")) for e in events]
+                    [str(e.payload.get("message_id", "")) for e in events],
+                    prompt_signature=agent.prompt_signature(),
                 )
 
                 base: Artifact | None = None

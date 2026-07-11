@@ -26,13 +26,24 @@ MODEL = "model"
 SUMMARY_KIND = "conversation.summary"
 
 
-def content_fingerprint(message_ids: Sequence[str]) -> str:
+def content_fingerprint(
+    message_ids: Sequence[str], *, prompt_signature: str = ""
+) -> str:
     """Return a stable fingerprint for an ordered sequence of message ids.
 
     Two runs over the same messages yield the same fingerprint; a new or removed
     message changes it, which is exactly when the summary must be recomputed.
+
+    ``prompt_signature`` folds the agent's prompt/render contract into the
+    fingerprint: when the prompt (or its render logic) changes, previously cached
+    summaries are treated as misses and recomputed. This prevents serving stale
+    knowledge that was produced under an older prompt — e.g. summaries generated
+    before the transcript carried per-message timestamps, which would otherwise
+    keep being reused without the dates the current prompt asks for.
     """
     joined = "\n".join(str(mid) for mid in message_ids)
+    if prompt_signature:
+        joined = f"{joined}\n\x00prompt={prompt_signature}"
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 

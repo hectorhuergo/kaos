@@ -23,6 +23,17 @@ def test_fingerprint_is_stable_and_order_sensitive() -> None:
     assert a != content_fingerprint(["3", "2", "1"])  # order matters
 
 
+def test_fingerprint_changes_with_prompt_signature() -> None:
+    # Same messages but a different prompt/render contract must not collide, so
+    # summaries produced under an older prompt (e.g. before timestamps) are not
+    # served as cache hits.
+    base = content_fingerprint(["1", "2"])
+    v2 = content_fingerprint(["1", "2"], prompt_signature="abc123")
+    assert base != v2
+    assert v2 == content_fingerprint(["1", "2"], prompt_signature="abc123")
+    assert v2 != content_fingerprint(["1", "2"], prompt_signature="def456")
+
+
 def _summary(workspace: str, thread_id: str, fp: str) -> Artifact:
     return Artifact(
         kind="conversation.summary",

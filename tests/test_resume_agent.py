@@ -32,6 +32,16 @@ def test_accepts_only_when_conversation_completed() -> None:
     assert agent.accepts(with_trigger) is True
 
 
+def test_prompt_signature_tracks_extra_instructions() -> None:
+    base = ResumeAgent(EchoLLMProvider())
+    focused = ResumeAgent(EchoLLMProvider(), extra_instructions="enfócate en riesgos")
+    # Deterministic and short.
+    assert base.prompt_signature() == ResumeAgent(EchoLLMProvider()).prompt_signature()
+    assert len(base.prompt_signature()) == 12
+    # Different prompt -> different signature (so the cache recomputes).
+    assert base.prompt_signature() != focused.prompt_signature()
+
+
 def test_run_produces_traceable_summary() -> None:
     canned = "# Resumen Ejecutivo\n## Estado\n- ok"
     llm = EchoLLMProvider(response=canned)

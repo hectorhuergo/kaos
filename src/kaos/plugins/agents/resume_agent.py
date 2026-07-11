@@ -7,6 +7,7 @@ Provider Agnostic, and every artifact traces back to the events it summarizes.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 
 from kaos.contracts.artifact import Artifact
@@ -17,6 +18,13 @@ from kaos.core.redaction import redact_secrets
 
 ARTIFACT_KIND = "conversation.summary"
 CONVERSATION_COMPLETED = "conversation.completed"
+
+# Bump when the prompt OR the transcript render changes in a way that should
+# invalidate cached summaries. Folded into ``prompt_signature`` so downstream
+# caches recompute instead of serving knowledge produced by an older contract.
+# v2: the transcript now prefixes each message with its ISO-8601 timestamp and
+# the prompt asks the model to use those dates.
+PROMPT_VERSION = "2"
 
 SYSTEM_PROMPT = (
     "Eres un analista que produce resúmenes ejecutivos de conversaciones de "
@@ -63,6 +71,17 @@ class ResumeAgent:
             "contradigan el formato y las secciones pedidas):\n"
             f"{self._extra_instructions}"
         )
+
+    def prompt_signature(self) -> str:
+        """Short, stable hash identifying the prompt actually used.
+
+        Captures the base prompt, any user ``extra_instructions`` and the
+        ``PROMPT_VERSION`` (which tracks render-only changes such as adding
+        timestamps to the transcript). Caches fold this into their fingerprint so
+        a change here invalidates summaries produced under an older prompt.
+        """
+        material = f"{PROMPT_VERSION}\n{self._system_prompt()}"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
     @staticmethod
     def _is_message(event_type: str) -> bool:
