@@ -127,6 +127,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0015 — GitHub Subscriptions & Subscription Runner Registry
 - ADR-0016 — Scheduler Execution Plan (per-subscription cadence)
 - ADR-0017 — Console: Agent Catalog, Prompt Augmentation & Interactive Run
+- ADR-0018 — Friendly Names, Dashboard Header & Persisted Agent Prompts
 
 ### RFC
 

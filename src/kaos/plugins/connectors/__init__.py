@@ -13,6 +13,11 @@ from kaos.plugins.connectors.discord_connector import (
     StaticDiscordSource,
 )
 from kaos.plugins.connectors.discord_gateway import DiscordGatewaySource
+from kaos.plugins.connectors.discord_rest import (
+    count_admin_roles,
+    fetch_channel,
+    fetch_guild,
+)
 from kaos.plugins.connectors.github_connector import (
     GitHubActivitySource,
     GitHubConnector,
@@ -33,6 +38,9 @@ __all__ = [
     "GitHubRestSource",
     "StaticDiscordSource",
     "StaticGitHubSource",
+    "count_admin_roles",
+    "fetch_channel",
+    "fetch_guild",
     "list_forum_threads",
 ]
 

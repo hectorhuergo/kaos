@@ -25,5 +25,9 @@ class RuntimeConfig(BaseModel):
 
     llm_provider: str = "echo"
     llm_model: str = "gpt-4o-mini"
+    # Per-agent extra prompt instructions (by agent id). Non-secret, durable
+    # runtime state: the operator augments an agent's prompt from the console and
+    # the choice must survive restarts, just like the provider/model selection.
+    agent_instructions: dict[str, str] = Field(default_factory=dict)
     updated_at: datetime = Field(default_factory=utcnow)
 

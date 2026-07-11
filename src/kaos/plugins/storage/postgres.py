@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS kaos_runtime_config (
     llm_model text NOT NULL,
     updated_at timestamptz NOT NULL
 );
+-- Backward-compatible migration for databases created before agent prompts.
+ALTER TABLE kaos_runtime_config
+    ADD COLUMN IF NOT EXISTS agent_instructions jsonb NOT NULL DEFAULT '{}';
 """
 
 _CREDENTIALS_SCHEMA = """
@@ -287,11 +290,17 @@ class PostgresConfigStore:
         self._dsn = dsn
         self._pool: Any = None
 
+    async def _init_connection(self, conn: Any) -> None:
+        # Decode the agent_instructions jsonb column as a Python dict.
+        await conn.set_type_codec(
+            "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+        )
+
     async def _ensure_pool(self) -> Any:
         if self._pool is None:
             import asyncpg  # lazy import: only needed for PostgreSQL
 
-            self._pool = await asyncpg.create_pool(self._dsn)
+            self._pool = await asyncpg.create_pool(self._dsn, init=self._init_connection)
             async with self._pool.acquire() as conn:
                 await conn.execute(_RUNTIME_CONFIG_SCHEMA)
         return self._pool
@@ -306,6 +315,7 @@ class PostgresConfigStore:
         return RuntimeConfig(
             llm_provider=row["llm_provider"],
             llm_model=row["llm_model"],
+            agent_instructions=dict(row["agent_instructions"] or {}),
             updated_at=row["updated_at"],
         )
 
@@ -314,16 +324,18 @@ class PostgresConfigStore:
         await pool.execute(
             """
             INSERT INTO kaos_runtime_config
-                (name, llm_provider, llm_model, updated_at)
-            VALUES ($1, $2, $3, $4)
+                (name, llm_provider, llm_model, agent_instructions, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (name) DO UPDATE SET
                 llm_provider = EXCLUDED.llm_provider,
                 llm_model = EXCLUDED.llm_model,
+                agent_instructions = EXCLUDED.agent_instructions,
                 updated_at = EXCLUDED.updated_at
             """,
             SINGLETON,
             config.llm_provider,
             config.llm_model,
+            dict(config.agent_instructions),
             config.updated_at,
         )
 

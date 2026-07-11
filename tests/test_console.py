@@ -335,6 +335,83 @@ def test_agents_route_lists_catalog(client: TestClient) -> None:
     assert {"resume-agent", "dev-agent"} <= ids
 
 
+def test_agents_route_exposes_base_prompt(client: TestClient) -> None:
+    agents = client.get("/api/agents").json()["agents"]
+    resume = next(a for a in agents if a["id"] == "resume-agent")
+    # The base prompt is shown so the operator sees what extra instructions augment.
+    assert "Resumen Ejecutivo" in resume["base_prompt"]
+    assert resume["instructions"] == ""  # nothing saved yet
+
+
+def test_agent_instructions_persist_and_reflect(client: TestClient) -> None:
+    resp = client.put(
+        "/api/agents/resume-agent/instructions",
+        json={"instructions": "  enfocate en riesgos y montos  "},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["instructions"] == "enfocate en riesgos y montos"  # trimmed
+
+    # Persisted: a later GET returns the saved value.
+    agents = client.get("/api/agents").json()["agents"]
+    resume = next(a for a in agents if a["id"] == "resume-agent")
+    assert resume["instructions"] == "enfocate en riesgos y montos"
+
+
+def test_agent_instructions_survive_provider_change(client: TestClient) -> None:
+    client.put(
+        "/api/agents/resume-agent/instructions", json={"instructions": "tono formal"}
+    )
+    # Changing the provider must not wipe the saved agent instructions.
+    client.put("/api/config/provider", json={"provider": "openai", "model": "gpt-4o"})
+    agents = client.get("/api/agents").json()["agents"]
+    resume = next(a for a in agents if a["id"] == "resume-agent")
+    assert resume["instructions"] == "tono formal"
+
+
+def test_agent_instructions_empty_clears(client: TestClient) -> None:
+    client.put("/api/agents/resume-agent/instructions", json={"instructions": "algo"})
+    client.put("/api/agents/resume-agent/instructions", json={"instructions": "   "})
+    agents = client.get("/api/agents").json()["agents"]
+    resume = next(a for a in agents if a["id"] == "resume-agent")
+    assert resume["instructions"] == ""
+
+
+def test_agent_instructions_unknown_agent_is_404(client: TestClient) -> None:
+    resp = client.put("/api/agents/nope/instructions", json={"instructions": "x"})
+    assert resp.status_code == 404
+
+
+def test_preview_subscription_uses_saved_instructions(
+    client: TestClient, monkeypatch  # type: ignore[no-untyped-def]
+) -> None:
+    from kaos.contracts.artifact import Artifact
+
+    client.post("/api/subscriptions", json={"channel_id": "123", "kind": "forum"})
+    client.put(
+        "/api/agents/resume-agent/instructions",
+        json={"instructions": "enfocate en decisiones"},
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+        seen["extra"] = extra_instructions
+        await publisher.publish(
+            Artifact(
+                kind="project.status",
+                workspace=f"discord:{channel_id}",
+                produced_by="resume-agent",
+                content={"summary": "# ok"},
+            )
+        )
+        return 0
+
+    monkeypatch.setattr("kaos.plugins.dashboard.preview.run_forum_backfill", fake_forum)
+    # No extra_instructions in the request -> the saved ones are applied.
+    resp = client.post("/api/preview/subscription", json={"channel_id": "123"})
+    assert resp.status_code == 200
+    assert seen["extra"] == "enfocate en decisiones"
+
+
 def test_run_subscription_missing_is_422(client: TestClient) -> None:
     resp = client.post("/api/run/subscription", json={"channel_id": "nope"})
     assert resp.status_code == 422

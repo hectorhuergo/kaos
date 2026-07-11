@@ -31,8 +31,22 @@ section{margin-bottom:2rem}
 .tags span{margin-right:.9rem}
 pre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0;line-height:1.45}
 .graph{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem;overflow:auto;max-height:78vh}
-.mermaid{min-width:max-content}
-.mermaid svg{max-width:none !important;height:auto}
+/* Scale the diagram to the container instead of letting a few nodes grow huge:
+   a percentage max-width + smaller fonts and thinner strokes keep small graphs
+   readable (see Mermaid useMaxWidth in the init script). */
+.mermaid{display:flex;justify-content:center}
+.mermaid svg{max-width:100% !important;height:auto}
+.mermaid .node rect,.mermaid .node polygon,.mermaid .node circle,.mermaid .node path{stroke-width:1px}
+.mermaid .edgePath path,.mermaid .flowchart-link{stroke-width:1px !important}
+.mermaid .nodeLabel,.mermaid .edgeLabel,.mermaid span{font-size:11px}
+.mermaid .edgeLabel{background:#161a22}
+/* Dashboard header: channel/forum details + indicators. */
+.hdr-sub{color:#8a93a2;font-size:.9rem;margin-top:.2rem}
+.hdr-topic{color:#a7b0be;font-size:.85rem;margin-top:.35rem;max-width:70ch}
+.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.55rem}
+.chip{font-size:.75rem;padding:.2rem .55rem;border-radius:999px;border:1px solid #2f3646;color:#c9d1da;background:#0f1115}
+.chip b{color:#e6e6e6;font-weight:600}
+.ws-id{color:#5b6472;font-size:.75rem;font-weight:400;margin-left:.5rem}
 .ver-nav{display:flex;align-items:center;gap:.6rem;margin:.1rem 0 .7rem}
 .ver-btn{background:#0f1115;border:1px solid #2f3646;color:#e6e6e6;border-radius:6px;padding:.15rem .55rem;cursor:pointer;font-size:.9rem}
 .ver-btn:hover{border-color:#4f8cff}
@@ -63,15 +77,23 @@ def render_dashboard(
     *,
     title: str = "KAOS — Conocimiento",
     generated_at: datetime | None = None,
+    header: dict[str, object] | None = None,
+    workspace_labels: dict[str, str] | None = None,
 ) -> str:
     """Render a self-contained HTML dashboard for the given knowledge.
 
     Artifacts that describe the same logical node (e.g. the same thread
     summarized by two different models) are grouped into a single, navigable card
     — arrows switch between versions, showing the model and date of each.
+
+    ``header`` optionally carries resolved channel/guild details (name, topic,
+    member/online counts, …) shown in the page header. ``workspace_labels`` maps a
+    workspace id (``discord:123``) to a friendly name so section titles read as
+    the channel/forum name instead of a raw id.
     """
     when = (generated_at or utcnow()).isoformat(timespec="seconds")
     total = sum(len(arts) for _, arts in artifacts_by_workspace)
+    labels = workspace_labels or {}
 
     sections: list[str] = []
     for workspace, artifacts in artifacts_by_workspace:
@@ -79,9 +101,11 @@ def render_dashboard(
         cards = "\n".join(_card_group(g) for g in groups) or (
             "<p class='meta'>(sin artifacts)</p>"
         )
-        sections.append(
-            f"<section><h2>{html.escape(workspace)}</h2>\n{cards}</section>"
-        )
+        label = labels.get(workspace, workspace)
+        heading = html.escape(label)
+        if label != workspace:
+            heading += f"<span class='ws-id'>{html.escape(workspace)}</span>"
+        sections.append(f"<section><h2>{heading}</h2>\n{cards}</section>")
 
     mermaid = html.escape(graph.to_mermaid())
     return f"""<!doctype html>
@@ -93,10 +117,7 @@ def render_dashboard(
 <style>{_STYLE}</style>
 </head>
 <body>
-<header>
-  <h1>{html.escape(title)}</h1>
-  <div class="meta">{total} artifact(s) · generado {html.escape(when)}</div>
-</header>
+{_header_html(title, when, total, header)}
 <main>
   <section class="graph">
     <h2>Trazabilidad</h2>
@@ -106,12 +127,78 @@ def render_dashboard(
 </main>
 <script src="{_MERMAID_CDN}"></script>
 <script>
-  mermaid.initialize({{ startOnLoad: true, theme: "dark", securityLevel: "loose" }});
+  mermaid.initialize({{
+    startOnLoad: true, theme: "dark", securityLevel: "loose",
+    themeVariables: {{ fontSize: "12px" }},
+    flowchart: {{ useMaxWidth: true, htmlLabels: true,
+                 nodeSpacing: 25, rankSpacing: 35, padding: 6 }}
+  }});
 </script>
 <script>{_SCRIPT}</script>
 </body>
 </html>
 """
+
+
+def _header_html(
+    title: str, when: str, total: int, header: dict[str, object] | None
+) -> str:
+    """Render the page header, enriched with channel/guild details when known."""
+    meta = f"{total} artifact(s) · generado {html.escape(when)}"
+    if not header:
+        return (
+            "<header>\n"
+            f'  <h1>{html.escape(title)}</h1>\n'
+            f'  <div class="meta">{meta}</div>\n'
+            "</header>"
+        )
+
+    channel = _as_dict(header.get("channel"))
+    guild = _as_dict(header.get("guild"))
+    name = str(channel.get("name") or header.get("workspace") or title)
+    guild_name = str(guild.get("name") or "")
+    sub = f"💬 {html.escape(name)}"
+    if guild_name:
+        sub += f" · 🏠 {html.escape(guild_name)}"
+
+    topic = str(channel.get("topic") or "")
+    topic_html = f'<div class="hdr-topic">{html.escape(topic)}</div>' if topic else ""
+
+    chips = "".join(_chip(lbl, val) for lbl, val in _indicators(channel, guild))
+    chips_html = f'<div class="chips">{chips}</div>' if chips else ""
+
+    return (
+        "<header>\n"
+        f'  <h1>{html.escape(title)}</h1>\n'
+        f'  <div class="hdr-sub">{sub}</div>\n'
+        f"  {topic_html}\n"
+        f"  {chips_html}\n"
+        f'  <div class="meta" style="margin-top:.55rem">{meta}</div>\n'
+        "</header>"
+    )
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    """Coerce a header sub-section to a dict (empty when missing/malformed)."""
+    return value if isinstance(value, dict) else {}
+
+
+def _indicators(
+    channel: dict[str, object], guild: dict[str, object]
+) -> list[tuple[str, object]]:
+    """The available channel/guild indicators, skipping unknown ones."""
+    candidates: list[tuple[str, object]] = [
+        ("👥 miembros", guild.get("members")),
+        ("🟢 en línea", guild.get("online")),
+        ("🛡️ roles admin", guild.get("admin_roles")),
+        ("🚀 boosts", guild.get("boosts")),
+        ("🧵 tipo", channel.get("type_label")),
+    ]
+    return [(label, value) for label, value in candidates if value not in (None, "")]
+
+
+def _chip(label: str, value: object) -> str:
+    return f"<span class='chip'>{html.escape(label)} <b>{html.escape(str(value))}</b></span>"
 
 
 def _artifact_title(artifact: Artifact) -> str:

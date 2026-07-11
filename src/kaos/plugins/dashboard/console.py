@@ -77,9 +77,19 @@ function tab(name){
 }
 
 // ---- Agents ----
-// Extra instructions are kept per-agent (by id). The summary pipeline (preview
-// and run) consumes the resume-agent's, augmenting its prompt.
+// Extra instructions are kept per-agent (by id) and persisted via the API. The
+// summary pipeline (preview and run) consumes the resume-agent's, augmenting its
+// prompt. The textarea is pre-filled with the saved value on load.
 function agentExtra(id='resume-agent'){ const el = $('#agent-extra-'+id); return el ? el.value.trim() : ''; }
+async function saveAgentInstructions(id){
+  const el = $('#agent-extra-'+id); if(!el) return;
+  try{
+    await api('/api/agents/'+encodeURIComponent(id)+'/instructions',
+      {method:'PUT', headers:{'content-type':'application/json'},
+       body: JSON.stringify({instructions: el.value})});
+    toast('Instrucciones guardadas');
+  }catch(e){ toast(e.message, false); }
+}
 async function loadAgents(){
   const box = $('#agents'); box.innerHTML = '<p class="muted">Cargando…</p>';
   try{
@@ -87,15 +97,20 @@ async function loadAgents(){
     box.innerHTML = d.agents.map(a => `
       <div class="card">
         <div class="row">
-          <div class="grow"><strong>${a.label}</strong> <span class="muted">${a.id}</span>
-            <div class="muted">${a.description}</div>
-            <div class="muted">produce: <code>${a.produces}</code> · disparo: <code>${a.trigger}</code></div>
+          <div class="grow"><strong>${esc(a.label)}</strong> <span class="muted">${esc(a.id)}</span>
+            <div class="muted">${esc(a.description)}</div>
+            <div class="muted">produce: <code>${esc(a.produces)}</code> · disparo: <code>${esc(a.trigger)}</code></div>
           </div>
           ${a.augmentable?'<span class="pill ok">prompt aumentable</span>':'<span class="pill">prompt fijo</span>'}
         </div>
+        ${a.base_prompt?`<details style="margin-top:.6rem"><summary class="muted" style="cursor:pointer">Ver prompt base</summary>
+          <pre class="out">${esc(a.base_prompt)}</pre></details>`:''}
         ${a.augmentable?`<label for="agent-extra-${a.id}">Prompt extra para ${esc(a.label)}</label>
-          <textarea id="agent-extra-${a.id}" rows="3" style="width:100%;background:#0f1115;border:1px solid #2f3646;border-radius:8px;color:#e6e6e6;padding:.5rem .6rem;font-size:.95rem" placeholder="p. ej.: enfocate en decisiones técnicas y montos; tono formal."></textarea>
-          ${a.id==='resume-agent'?'<div class="muted" style="margin-top:.3rem">Se aplica al generar Vista previa o Ejecutar.</div>':'<div class="muted" style="margin-top:.3rem">Se aplicará cuando se ejecute este agente.</div>'}`:''}
+          <textarea id="agent-extra-${a.id}" rows="3" style="width:100%;background:#0f1115;border:1px solid #2f3646;border-radius:8px;color:#e6e6e6;padding:.5rem .6rem;font-size:.95rem" placeholder="p. ej.: enfocate en decisiones técnicas y montos; tono formal.">${esc(a.instructions)}</textarea>
+          <div class="row" style="margin-top:.5rem">
+            <button class="act" onclick="saveAgentInstructions('${a.id}')">Guardar instrucciones</button>
+            ${a.id==='resume-agent'?'<span class="muted">Se aplica al generar Vista previa o Ejecutar.</span>':'<span class="muted">Se aplicará cuando se ejecute este agente.</span>'}
+          </div>`:''}
       </div>`).join('');
   }catch(e){ box.innerHTML = `<p class="muted">Error: ${e.message}</p>`; }
 }
@@ -179,8 +194,8 @@ async function loadSubscriptions(){
     if(!d.subscriptions.length){ box.innerHTML = '<p class="muted">(sin suscripciones activas)</p>'; return; }
     box.innerHTML = d.subscriptions.map(s => `
       <div class="card"><div class="row">
-        <div class="grow"><strong>${s.kind}</strong> · <code>${s.channel_id}</code>
-          <div class="muted">workspace: ${s.workspace} · guild: ${s.guild_id||'-'} · resume: ${s.resume_thread_id||'-'} · plan: ${s.interval_seconds?('cada '+s.interval_seconds+'s'):'cada pasada'}</div>
+        <div class="grow"><strong>${esc(s.name||s.channel_id)}</strong> <span class="pill">${esc(s.kind)}</span>
+          <div class="muted"><code>${esc(s.channel_id)}</code> · workspace: ${esc(s.workspace)} · guild: ${esc(s.guild_id||'-')} · resume: ${esc(s.resume_thread_id||'-')} · plan: ${s.interval_seconds?('cada '+s.interval_seconds+'s'):'cada pasada'}</div>
         </div>
         <button class="act danger" onclick="removeSub('${s.channel_id}')">Quitar</button>
       </div></div>`).join('');
@@ -216,9 +231,10 @@ async function loadDashboards(){
   try{
     const d = await api('/api/workspaces');
     if(!d.workspaces.length){ box.innerHTML = '<p class="muted">(sin workspaces — crea una suscripción)</p>'; return; }
+    const labels = d.labels || {};
     box.innerHTML = d.workspaces.map(ws => `
       <div class="card"><div class="row">
-        <div class="grow"><strong>${ws}</strong></div>
+        <div class="grow"><strong>${esc(labels[ws]||ws)}</strong> <span class="muted">${esc(ws)}</span></div>
         <a class="act ghost" href="/?workspace=${encodeURIComponent(ws)}" target="_blank">Abrir dashboard ↗</a>
       </div></div>`).join('');
   }catch(e){ box.innerHTML = `<p class="muted">Error: ${e.message}</p>`; }
@@ -234,7 +250,7 @@ async function loadPreview(){
       sel.innerHTML = '<option value="">(sin suscripciones)</option>';
     } else {
       sel.innerHTML = d.subscriptions.map(s =>
-        `<option value="${s.channel_id}">${s.kind} · ${s.channel_id}</option>`).join('');
+        `<option value="${s.channel_id}">${esc(s.name||s.channel_id)} · ${esc(s.kind)}</option>`).join('');
     }
   }catch(e){ /* ignore */ }
 }

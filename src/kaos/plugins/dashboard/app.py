@@ -13,6 +13,7 @@ Routes:
 - ``GET  /api/knowledge``            → the knowledge graph as JSON.
 - ``GET  /api/artifacts``            → the stored artifacts (optionally by ws).
 - ``GET  /api/agents``               → the catalog of agents KAOS ships.
+- ``PUT  /api/agents/{id}/instructions`` → persist an agent's extra prompt.
 - ``GET  /api/providers``            → LLM provider catalog + persisted choice.
 - ``PUT  /api/config/provider``      → persist the active provider + model.
 - ``PUT  /api/providers/{id}/credential`` → persist a provider's secret.
@@ -48,8 +49,14 @@ from kaos.core.providers import provider_status, secret_field
 from kaos.domain.provider_credential import ProviderCredential
 from kaos.domain.runtime_config import RuntimeConfig
 from kaos.domain.subscription import GITHUB, KINDS, Subscription
+from kaos.plugins.agents.dev_agent import BASE_PROMPT as DEV_BASE_PROMPT
+from kaos.plugins.agents.resume_agent import SYSTEM_PROMPT as RESUME_BASE_PROMPT
 from kaos.plugins.dashboard import render_dashboard
 from kaos.plugins.dashboard.console import render_console
+from kaos.plugins.dashboard.directory import (
+    resolve_header,
+    resolve_labels,
+)
 from kaos.plugins.dashboard.execute import RunError, run_all, run_subscription
 from kaos.plugins.dashboard.preview import (
     PreviewError,
@@ -57,6 +64,13 @@ from kaos.plugins.dashboard.preview import (
     preview_subscription,
 )
 from kaos.plugins.dashboard.service import artifacts_to_dicts, load_knowledge
+
+# The base (fixed) prompt each augmentable agent uses, shown in the console so an
+# operator can see what their extra instructions are appended to.
+AGENT_BASE_PROMPTS: dict[str, str] = {
+    "resume-agent": RESUME_BASE_PROMPT,
+    "dev-agent": DEV_BASE_PROMPT,
+}
 
 
 class ProviderChoice(BaseModel):
@@ -114,6 +128,12 @@ class SubscriptionInput(BaseModel):
     guild_id: str | None = None
     resume_thread_id: str | None = None
     interval_seconds: int | None = None
+
+
+class AgentInstructionsInput(BaseModel):
+    """Request body: the extra prompt instructions to persist for an agent."""
+
+    instructions: str = ""
 
 
 async def _close(obj: object) -> None:
@@ -194,25 +214,33 @@ def create_app(
         workspace: str | None = Query(default=None),
         events: bool = Query(default=False),
     ) -> str:
-        _ws, graph, sections = await load_knowledge(
+        workspaces, graph, sections = await load_knowledge(
             cfg,
             workspace=workspace,
             include_events=events,
             storage=_store(),
             subscription_store=_subs(),
         )
-        return render_dashboard(sections, graph)
+        # Friendly names for section titles, and a rich header when a single
+        # Discord workspace is in view (best-effort; falls back to the raw id).
+        labels = await resolve_labels(workspaces, cfg)
+        header = None
+        if len(workspaces) == 1:
+            header = await resolve_header(workspaces[0], cfg)
+        return render_dashboard(
+            sections, graph, header=header, workspace_labels=labels
+        )
 
     @app.get("/console", response_class=HTMLResponse)
     async def console() -> str:
         return render_console()
 
     @app.get("/api/workspaces")
-    async def api_workspaces() -> dict[str, list[str]]:
+    async def api_workspaces() -> dict[str, Any]:
         workspaces, _graph, _sections = await load_knowledge(
             cfg, storage=_store(), subscription_store=_subs()
         )
-        return {"workspaces": workspaces}
+        return {"workspaces": workspaces, "labels": await resolve_labels(workspaces, cfg)}
 
     @app.get("/api/knowledge")
     async def api_knowledge(
@@ -247,8 +275,16 @@ def create_app(
 
     # ---- Providers (persisted runtime config) ----
 
+    async def _current_config() -> RuntimeConfig:
+        """Return the persisted config, or a default seeded from the environment."""
+        persisted: RuntimeConfig | None = await _config().get()
+        if persisted is not None:
+            return persisted
+        return RuntimeConfig(llm_provider=cfg.llm_provider, llm_model=cfg.llm_model)
+
     @app.get("/api/agents")
     async def api_agents() -> dict[str, Any]:
+        instructions = (await _current_config()).agent_instructions
         return {
             "agents": [
                 {
@@ -258,9 +294,44 @@ def create_app(
                     "produces": a.produces,
                     "trigger": a.trigger,
                     "augmentable": a.augmentable,
+                    "base_prompt": AGENT_BASE_PROMPTS.get(a.id, ""),
+                    "instructions": instructions.get(a.id, ""),
                 }
                 for a in agent_catalog()
             ]
+        }
+
+    @app.put("/api/agents/{agent_id}/instructions")
+    async def api_set_agent_instructions(
+        agent_id: str, body: AgentInstructionsInput = Body(...)
+    ) -> dict[str, Any]:
+        agent = next((a for a in agent_catalog() if a.id == agent_id), None)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        if not agent.augmentable:
+            raise HTTPException(
+                status_code=422, detail=f"agent '{agent_id}' takes no extra prompt"
+            )
+        # Read-modify-write so we keep the provider/model selection and any other
+        # agents' instructions intact.
+        current = await _current_config()
+        merged = dict(current.agent_instructions)
+        text = body.instructions.strip()
+        if text:
+            merged[agent_id] = text
+        else:
+            merged.pop(agent_id, None)  # empty clears the override
+        await _config().set(
+            RuntimeConfig(
+                llm_provider=current.llm_provider,
+                llm_model=current.llm_model,
+                agent_instructions=merged,
+            )
+        )
+        return {
+            "agent": agent_id,
+            "instructions": merged.get(agent_id, ""),
+            "persistent": bool(cfg.database_url),
         }
 
     @app.get("/api/providers")
@@ -302,7 +373,12 @@ def create_app(
                 detail=f"provider must be one of {LLM_PROVIDERS}",
             )
         model = choice.model.strip() or cfg.llm_model
-        config = RuntimeConfig(llm_provider=choice.provider, llm_model=model)
+        current = await _current_config()
+        config = RuntimeConfig(
+            llm_provider=choice.provider,
+            llm_model=model,
+            agent_instructions=current.agent_instructions,
+        )
         await _config().set(config)
         return {
             "provider": config.llm_provider,
@@ -347,11 +423,15 @@ def create_app(
     @app.get("/api/subscriptions")
     async def api_subscriptions() -> dict[str, Any]:
         subs = await _subs().list(active_only=True)
+        # Resolve a friendly channel/forum/repo name per subscription (best-effort;
+        # falls back to the raw id when there is no token or the lookup fails).
+        labels = await resolve_labels([s.workspace for s in subs], cfg)
         return {
             "subscriptions": [
                 {
                     "id": str(s.id),
                     "workspace": s.workspace,
+                    "name": labels.get(s.workspace, s.workspace),
                     "kind": s.kind,
                     "channel_id": s.channel_id,
                     "guild_id": s.guild_id,
@@ -394,6 +474,17 @@ def create_app(
 
     # ---- Dry-run previews (summarize without publishing to Discord) ----
 
+    async def _effective_instructions(provided: str) -> str:
+        """Use the request's instructions, or fall back to the persisted ones.
+
+        The summary pipeline augments the Resume Agent's prompt; when a caller
+        does not pass instructions we apply the ones saved from the console so a
+        stored preference also applies to scheduled/headless runs.
+        """
+        if provided.strip():
+            return provided
+        return (await _current_config()).agent_instructions.get("resume-agent", "")
+
     @app.post("/api/preview/github")
     async def api_preview_github(
         body: GitHubPreviewInput = Body(...),
@@ -401,7 +492,7 @@ def create_app(
         try:
             artifacts = await preview_github(
                 cfg, body.repo, limit=body.limit,
-                extra_instructions=body.extra_instructions,
+                extra_instructions=await _effective_instructions(body.extra_instructions),
             )
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -414,7 +505,7 @@ def create_app(
         try:
             artifacts = await preview_subscription(
                 cfg, body.channel_id, subscription_store=_subs(),
-                extra_instructions=body.extra_instructions,
+                extra_instructions=await _effective_instructions(body.extra_instructions),
             )
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -433,7 +524,7 @@ def create_app(
                 subscription_store=_subs(),
                 force=body.force,
                 publish=body.publish,
-                extra_instructions=body.extra_instructions,
+                extra_instructions=await _effective_instructions(body.extra_instructions),
             )
         except RunError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -451,7 +542,7 @@ def create_app(
                 subscription_store=_subs(),
                 force=body.force,
                 publish=body.publish,
-                extra_instructions=body.extra_instructions,
+                extra_instructions=await _effective_instructions(body.extra_instructions),
             )
         except RunError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -43,6 +43,10 @@ _PROTOCOL = (
     "Herramientas disponibles:\n"
 )
 
+# Public alias: the stable base prompt (tools are appended at run time). Exposed
+# so the console can display the Dev Agent's base prompt in the Agents view.
+BASE_PROMPT = _PROTOCOL
+
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     """Return the first balanced ``{...}`` object parsed from ``text``, or None."""
