@@ -13,8 +13,10 @@ from collections.abc import Awaitable, Callable
 from kaos.bootstrap.factory import build_subscription_store
 from kaos.cli.backfill import run_backfill, run_forum_backfill
 from kaos.cli.github import run_github
+from kaos.contracts.publisher import Publisher
 from kaos.core.config import Settings
 from kaos.domain.subscription import CHANNEL, FORUM, GITHUB, KINDS, Subscription
+from kaos.plugins.publishers import ConsolePublisher
 
 # A subscription runner turns one active subscription into a summarization run.
 # Registering a kind here (instead of an ``if/elif`` chain) keeps the dispatch
@@ -25,7 +27,13 @@ SubscriptionRunner = Callable[..., Awaitable[int]]
 
 
 async def _run_forum(
-    sub: Subscription, *, dry_run: bool, consolidated: bool, force: bool, settings: Settings
+    sub: Subscription,
+    *,
+    dry_run: bool,
+    consolidated: bool,
+    force: bool,
+    settings: Settings,
+    publisher: Publisher | None = None,
 ) -> int:
     return await run_forum_backfill(
         sub.channel_id,
@@ -35,19 +43,36 @@ async def _run_forum(
         force=force,
         only_if_changed=True,
         settings=settings,
+        publisher=publisher,
     )
 
 
 async def _run_channel(
-    sub: Subscription, *, dry_run: bool, consolidated: bool, force: bool, settings: Settings
+    sub: Subscription,
+    *,
+    dry_run: bool,
+    consolidated: bool,
+    force: bool,
+    settings: Settings,
+    publisher: Publisher | None = None,
 ) -> int:
-    return await run_backfill(sub.channel_id, dry_run=dry_run, settings=settings)
+    return await run_backfill(
+        sub.channel_id, dry_run=dry_run, settings=settings, publisher=publisher
+    )
 
 
 async def _run_github(
-    sub: Subscription, *, dry_run: bool, consolidated: bool, force: bool, settings: Settings
+    sub: Subscription,
+    *,
+    dry_run: bool,
+    consolidated: bool,
+    force: bool,
+    settings: Settings,
+    publisher: Publisher | None = None,
 ) -> int:
-    return await run_github(sub.channel_id, dry_run=dry_run, settings=settings)
+    return await run_github(
+        sub.channel_id, dry_run=dry_run, settings=settings, publisher=publisher
+    )
 
 
 SUBSCRIPTION_RUNNERS: dict[str, SubscriptionRunner] = {
@@ -70,13 +95,20 @@ async def add_subscription(
     guild_id: str | None = None,
     resume_thread_id: str | None = None,
     interval_seconds: int | None = None,
+    project: str | None = None,
+    publish_default: bool = True,
+    related_to: list[str] | None = None,
     settings: Settings | None = None,
 ) -> int:
     """Persist a subscription to a forum/channel (Discord) or repo (GitHub).
 
     For ``kind == 'github'`` ``channel_id`` is the repository slug ``owner/name``.
     ``interval_seconds`` sets the execution plan (how often the scheduler runs
-    it); ``None`` means it runs on every scheduler pass.
+    it); ``None`` means it runs on every scheduler pass. ``project`` groups this
+    subscription with others under the same project name so they are related in
+    the knowledge graph (ADR-0019). ``publish_default`` controls whether an
+    automated run (scheduler / ``kaos run``) publishes this subscription's
+    summary; ``related_to`` lists other workspaces to relate it to in the graph.
     """
     if kind not in KINDS:
         print(f"error: kind must be one of {KINDS}, got '{kind}'")
@@ -93,6 +125,9 @@ async def add_subscription(
         guild_id=guild_id or settings.discord_guild_id,
         resume_thread_id=resume_thread_id or settings.discord_resume_thread_id,
         interval_seconds=interval_seconds,
+        project=project,
+        publish_default=publish_default,
+        related_to=list(related_to or []),
     )
     try:
         await store.add(subscription)
@@ -133,7 +168,13 @@ async def list_subscriptions(*, settings: Settings | None = None) -> int:
     print(f"{len(subscriptions)} suscripción(es) activa(s):")
     for sub in subscriptions:
         thread = sub.resume_thread_id or "-"
-        print(f"  · {sub.kind:7} {sub.channel_id}  guild={sub.guild_id or '-'}  resume={thread}")
+        project = f"  project={sub.project}" if sub.project else ""
+        publish = "publica" if sub.publish_default else "solo-conocimiento"
+        related = f"  related={','.join(sub.related_to)}" if sub.related_to else ""
+        print(
+            f"  · {sub.kind:7} {sub.channel_id}  guild={sub.guild_id or '-'}  "
+            f"resume={thread}  [{publish}]{project}{related}"
+        )
     return 0
 
 
@@ -176,7 +217,16 @@ async def run_subscriptions(
                 )
             }
         )
-        print(f"=== {sub.kind} {sub.channel_id} ===")
+        # Per-subscription publishing: an automated run publishes to Discord only
+        # when ``publish_default`` is set. When it isn't, the run still reads and
+        # persists the summary (real storage) but prints it to the console instead
+        # of posting — "knowledge-only". ``--dry-run`` forces the console path for
+        # every subscription regardless (and uses in-memory storage).
+        publisher: Publisher | None = None
+        if not dry_run and not sub.publish_default:
+            publisher = ConsolePublisher()
+        publishing = "publica" if (not dry_run and sub.publish_default) else "no publica"
+        print(f"=== {sub.kind} {sub.channel_id} ({publishing}) ===")
         runner = SUBSCRIPTION_RUNNERS.get(sub.kind, _run_channel)
         rc = await runner(
             sub,
@@ -184,6 +234,7 @@ async def run_subscriptions(
             consolidated=consolidated,
             force=force,
             settings=sub_settings,
+            publisher=publisher,
         )
         exit_code = exit_code or rc
     return exit_code

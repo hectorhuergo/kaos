@@ -12,9 +12,10 @@ import json
 from pathlib import Path
 
 from kaos.core.config import Settings
-from kaos.core.knowledge import ARTIFACT, WORKSPACE, KnowledgeGraph
+from kaos.core.knowledge import ARTIFACT, WORKSPACE, KnowledgeGraph, relate_workspaces
 from kaos.plugins.dashboard import render_dashboard
-from kaos.plugins.dashboard.service import load_knowledge
+from kaos.plugins.dashboard.directory import resolve_labels
+from kaos.plugins.dashboard.service import load_knowledge, load_projects, load_relations
 
 
 async def run_knowledge(
@@ -32,6 +33,14 @@ async def run_knowledge(
     if not workspaces:
         print("(sin workspaces — usa --workspace o crea una suscripción)")
         return 0
+
+    # Friendly names on the nodes + relate workspaces of the same project
+    # (by name prefix and by explicit ``project`` grouping).
+    labels = await resolve_labels(workspaces, settings)
+    graph.relabel(labels)
+    projects = await load_projects(settings, workspaces)
+    relations = await load_relations(settings, workspaces)
+    graph.edges.extend(relate_workspaces(labels, projects=projects, relations=relations))
 
     if fmt == "json":
         print(json.dumps(graph.to_dict(), ensure_ascii=False, indent=2))
@@ -74,8 +83,17 @@ async def run_dashboard(
         print("(sin workspaces — usa --workspace o crea una suscripción)")
         return 0
 
+    # Friendly names on the nodes/sections + relate workspaces of the same project.
+    labels = await resolve_labels(workspaces, settings)
+    graph.relabel(labels)
+    projects = await load_projects(settings, workspaces)
+    relations = await load_relations(settings, workspaces)
+    graph.edges.extend(relate_workspaces(labels, projects=projects, relations=relations))
+
     path = Path(out)
-    path.write_text(render_dashboard(sections, graph), encoding="utf-8")
+    path.write_text(
+        render_dashboard(sections, graph, workspace_labels=labels), encoding="utf-8"
+    )
     total = sum(len(a) for _, a in sections)
     print(f"Dashboard escrito en {path} ({total} artifact(s), {len(workspaces)} workspace(s)).")
     return 0

@@ -60,6 +60,24 @@ def main() -> int:
     sb_p.add_argument("--guild", default=None, help="guild id (overrides KAOS_DISCORD_GUILD_ID)")
     sb_p.add_argument("--resume-thread", default=None, help="thread id to publish summaries to")
     sb_p.add_argument(
+        "--project",
+        default=None,
+        help="group this subscription under a project (relates it in the graph)",
+    )
+    sb_p.add_argument(
+        "--no-publish",
+        dest="publish_default",
+        action="store_false",
+        help="knowledge-only: automated runs persist the summary but don't post it",
+    )
+    sb_p.set_defaults(publish_default=True)
+    sb_p.add_argument(
+        "--related",
+        default=None,
+        metavar="WS[,WS...]",
+        help="comma-separated workspace ids to relate this subscription to",
+    )
+    sb_p.add_argument(
         "--every",
         type=int,
         default=None,
@@ -211,6 +229,9 @@ def main() -> int:
                 guild_id=a.guild,
                 resume_thread_id=a.resume_thread,
                 interval_seconds=a.every,
+                project=a.project,
+                publish_default=a.publish_default,
+                related_to=[w.strip() for w in (a.related or "").split(",") if w.strip()],
             )
         )
     elif a.cmd == "unsubscribe":

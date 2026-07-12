@@ -119,7 +119,7 @@ async function loadAgents(){
 function credPill(p){
   if(!p.needs_secret) return '<span class="pill ok">no requiere credencial</span>';
   if(p.stored) return '<span class="pill ok">credencial en Postgres</span>';
-  if(p.active_env) return '<span class="pill ok">credencial en .env</span>';
+  if(p.env_ready) return '<span class="pill ok">credencial en .env</span>';
   return '<span class="pill no">sin credencial</span>';
 }
 function credForm(p){
@@ -187,18 +187,43 @@ async function clearCredential(provider){
 }
 
 // ---- Subscriptions ----
+let SUBS = [];
+// Build <option>s for a workspace multiselect: every subscription except
+// ``exclude`` (a workspace never relates to itself), preselecting ``selected``.
+function wsOptions(selected, exclude){
+  const sel = new Set(selected||[]);
+  return SUBS.filter(s => s.workspace !== exclude).map(s =>
+    `<option value="${esc(s.workspace)}" ${sel.has(s.workspace)?'selected':''}>${esc(s.name||s.channel_id)}</option>`).join('');
+}
+function selectedValues(el){ return el ? [...el.selectedOptions].map(o => o.value) : []; }
 async function loadSubscriptions(){
   const box = $('#subs'); box.innerHTML = '<p class="muted">Cargando…</p>';
   try{
     const d = await api('/api/subscriptions');
-    if(!d.subscriptions.length){ box.innerHTML = '<p class="muted">(sin suscripciones activas)</p>'; return; }
-    box.innerHTML = d.subscriptions.map(s => `
-      <div class="card"><div class="row">
-        <div class="grow"><strong>${esc(s.name||s.channel_id)}</strong> <span class="pill">${esc(s.kind)}</span>
-          <div class="muted"><code>${esc(s.channel_id)}</code> · workspace: ${esc(s.workspace)} · guild: ${esc(s.guild_id||'-')} · resume: ${esc(s.resume_thread_id||'-')} · plan: ${s.interval_seconds?('cada '+s.interval_seconds+'s'):'cada pasada'}</div>
+    SUBS = d.subscriptions;
+    const newRel = $('#sub-related'); if(newRel) newRel.innerHTML = wsOptions([], null);
+    if(!SUBS.length){ box.innerHTML = '<p class="muted">(sin suscripciones activas)</p>'; return; }
+    box.innerHTML = SUBS.map((s,i) => `
+      <div class="card">
+        <div class="row">
+          <div class="grow"><strong>${esc(s.name||s.channel_id)}</strong> <span class="pill">${esc(s.kind)}</span>${s.project?` <span class="pill">📦 ${esc(s.project)}</span>`:''}${s.publish_default?'':' <span class="pill no">solo conocimiento</span>'}${(s.related_to&&s.related_to.length)?` <span class="pill">🔗 ${s.related_to.length}</span>`:''}
+            <div class="muted"><code>${esc(s.channel_id)}</code> · workspace: ${esc(s.workspace)} · resume: ${esc(s.resume_thread_id||'-')} · plan: ${s.interval_seconds?('cada '+s.interval_seconds+'s'):'cada pasada'}</div>
+          </div>
+          <button class="act danger" onclick="removeSub('${esc(s.channel_id)}')">Quitar</button>
         </div>
-        <button class="act danger" onclick="removeSub('${s.channel_id}')">Quitar</button>
-      </div></div>`).join('');
+        <details style="margin-top:.6rem">
+          <summary class="muted" style="cursor:pointer">Editar</summary>
+          <div class="grid" style="margin-top:.6rem">
+            <div><label for="ed-project-${i}">Proyecto</label>
+              <input id="ed-project-${i}" value="${esc(s.project||'')}" placeholder="proyecto-x"></div>
+            <div><label>Publicar por defecto al ejecutar</label>
+              <label class="row" style="color:#8a93a2;font-size:.85rem"><input type="checkbox" id="ed-publish-${i}" ${s.publish_default?'checked':''} style="width:auto;margin-right:.4rem"> el scheduler publica esta suscripción</label></div>
+          </div>
+          <label for="ed-related-${i}">Relacionada con (otras suscripciones)</label>
+          <select id="ed-related-${i}" multiple size="4">${wsOptions(s.related_to, s.workspace)}</select>
+          <div class="row" style="margin-top:.6rem"><button class="act" onclick="saveSubEdit(${i})">Guardar cambios</button></div>
+        </details>
+      </div>`).join('');
   }catch(e){ box.innerHTML = `<p class="muted">Error: ${e.message}</p>`; }
 }
 async function addSub(){
@@ -209,13 +234,30 @@ async function addSub(){
     guild_id: $('#sub-guild').value.trim() || null,
     resume_thread_id: $('#sub-resume').value.trim() || null,
     interval_seconds: Number.isFinite(every) && every > 0 ? every : null,
+    project: $('#sub-project').value.trim() || null,
+    publish_default: $('#sub-publish').checked,
+    related_to: selectedValues($('#sub-related')),
   };
   if(!body.channel_id){ toast('Falta channel_id', false); return; }
   try{
     await api('/api/subscriptions', {method:'POST', headers:{'content-type':'application/json'},
       body: JSON.stringify(body)});
     toast('Suscripción guardada');
-    $('#sub-channel').value=''; $('#sub-guild').value=''; $('#sub-resume').value=''; $('#sub-every').value='';
+    $('#sub-channel').value=''; $('#sub-guild').value=''; $('#sub-resume').value=''; $('#sub-every').value=''; $('#sub-project').value='';
+    loadSubscriptions();
+  }catch(e){ toast(e.message, false); }
+}
+async function saveSubEdit(i){
+  const s = SUBS[i];
+  const body = {
+    project: $('#ed-project-'+i).value.trim() || null,
+    publish_default: $('#ed-publish-'+i).checked,
+    related_to: selectedValues($('#ed-related-'+i)),
+  };
+  try{
+    await api('/api/subscriptions/'+encodeURIComponent(s.channel_id),
+      {method:'PATCH', headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
+    toast('Suscripción actualizada');
     loadSubscriptions();
   }catch(e){ toast(e.message, false); }
 }
@@ -378,8 +420,14 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
           <input id="sub-guild" placeholder="hereda de .env"></div>
         <div><label for="sub-resume">Resume thread id (opcional)</label>
           <input id="sub-resume" placeholder="PMO"></div>
+        <div><label for="sub-project">Proyecto (opcional)</label>
+          <input id="sub-project" placeholder="proyecto-x (agrupa y relaciona en el grafo)"></div>
         <div><label for="sub-every">Plan: cada N segundos (opcional)</label>
           <input id="sub-every" type="number" min="1" placeholder="ej. 3600 (vacío = cada pasada)"></div>
+        <div><label for="sub-related">Relacionada con (opcional)</label>
+          <select id="sub-related" multiple size="3"></select></div>
+        <div><label>Publicar por defecto al ejecutar</label>
+          <label class="row" style="color:#8a93a2;font-size:.85rem"><input type="checkbox" id="sub-publish" checked style="width:auto;margin-right:.4rem"> el scheduler publica esta suscripción</label></div>
       </div>
       <div class="row" style="margin-top:1rem">
         <button class="act" onclick="addSub()">Suscribir</button>

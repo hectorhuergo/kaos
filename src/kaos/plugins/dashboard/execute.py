@@ -81,8 +81,21 @@ async def run_subscription(
     if subscription is None:
         raise RunError(f"no existe una suscripción para {channel_id}")
 
+    # Publish to *this subscription's* resume thread when it has one, falling back
+    # to the global default only when the subscription does not set it. Without
+    # this the console run would always use the env-wide
+    # ``KAOS_DISCORD_RESUME_THREAD_ID``, overriding the per-subscription value
+    # (matching the CLI ``run_subscriptions`` precedence).
+    run_settings = settings.model_copy(
+        update={
+            "discord_resume_thread_id": (
+                subscription.resume_thread_id or settings.discord_resume_thread_id
+            )
+        }
+    )
+
     capturing = CapturingPublisher()
-    publisher = _publisher_for(settings, publish=publish, capturing=capturing)
+    publisher = _publisher_for(run_settings, publish=publish, capturing=capturing)
     try:
         if subscription.kind == FORUM:
             rc = await run_forum_backfill(
@@ -92,7 +105,7 @@ async def run_subscription(
                 consolidated=consolidated,
                 force=force,
                 only_if_changed=False,  # always surface the current summaries
-                settings=settings,
+                settings=run_settings,
                 publisher=publisher,
                 extra_instructions=extra_instructions,
             )
@@ -100,7 +113,7 @@ async def run_subscription(
             rc = await run_github(
                 subscription.channel_id,
                 dry_run=False,
-                settings=settings,
+                settings=run_settings,
                 publisher=publisher,
                 extra_instructions=extra_instructions,
             )
@@ -108,7 +121,7 @@ async def run_subscription(
             rc = await run_backfill(
                 subscription.channel_id,
                 dry_run=False,
-                settings=settings,
+                settings=run_settings,
                 publisher=publisher,
                 extra_instructions=extra_instructions,
             )

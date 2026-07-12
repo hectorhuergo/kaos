@@ -20,6 +20,7 @@ Routes:
 - ``DELETE /api/providers/{id}/credential`` → clear a provider's secret.
 - ``GET  /api/subscriptions``        → active subscriptions.
 - ``POST /api/subscriptions``        → add/upsert a subscription.
+- ``PATCH /api/subscriptions/{id}``  → edit a subscription (project/publish/relations).
 - ``DELETE /api/subscriptions/{id}`` → deactivate a subscription.
 - ``POST /api/preview/github``       → dry-run summary of a repo (no publish).
 - ``POST /api/preview/subscription`` → dry-run summary of a subscription.
@@ -45,6 +46,7 @@ from kaos.bootstrap.factory import (
 )
 from kaos.core.agents import agent_catalog
 from kaos.core.config import LLM_PROVIDERS, Settings
+from kaos.core.knowledge import relate_workspaces
 from kaos.core.providers import provider_status, secret_field
 from kaos.domain.provider_credential import ProviderCredential
 from kaos.domain.runtime_config import RuntimeConfig
@@ -63,7 +65,12 @@ from kaos.plugins.dashboard.preview import (
     preview_github,
     preview_subscription,
 )
-from kaos.plugins.dashboard.service import artifacts_to_dicts, load_knowledge
+from kaos.plugins.dashboard.service import (
+    artifacts_to_dicts,
+    load_knowledge,
+    load_projects,
+    load_relations,
+)
 
 # The base (fixed) prompt each augmentable agent uses, shown in the console so an
 # operator can see what their extra instructions are appended to.
@@ -128,6 +135,22 @@ class SubscriptionInput(BaseModel):
     guild_id: str | None = None
     resume_thread_id: str | None = None
     interval_seconds: int | None = None
+    project: str | None = None
+    publish_default: bool = True
+    related_to: list[str] = []
+
+
+class SubscriptionPatch(BaseModel):
+    """Request body: partial edit of an existing subscription.
+
+    Only the provided fields are changed; the rest of the subscription is kept.
+    """
+
+    resume_thread_id: str | None = None
+    interval_seconds: int | None = None
+    project: str | None = None
+    publish_default: bool | None = None
+    related_to: list[str] | None = None
 
 
 class AgentInstructionsInput(BaseModel):
@@ -224,6 +247,12 @@ def create_app(
         # Friendly names for section titles, and a rich header when a single
         # Discord workspace is in view (best-effort; falls back to the raw id).
         labels = await resolve_labels(workspaces, cfg)
+        graph.relabel(labels)  # show channel/forum names on the graph nodes
+        projects = await load_projects(cfg, workspaces, subscription_store=_subs())
+        relations = await load_relations(cfg, workspaces, subscription_store=_subs())
+        graph.edges.extend(  # connect related projects (name + explicit grouping)
+            relate_workspaces(labels, projects=projects, relations=relations)
+        )
         header = None
         if len(workspaces) == 1:
             header = await resolve_header(workspaces[0], cfg)
@@ -247,12 +276,22 @@ def create_app(
         workspace: str | None = Query(default=None),
         events: bool = Query(default=False),
     ) -> dict[str, Any]:
-        _ws, graph, _sections = await load_knowledge(
+        workspaces, graph, _sections = await load_knowledge(
             cfg,
             workspace=workspace,
             include_events=events,
             storage=_store(),
             subscription_store=_subs(),
+        )
+        # Relabel workspace nodes with friendly channel/forum names so the graph
+        # doesn't expose the raw ``discord:<id>`` (best-effort; falls back to id),
+        # and connect workspaces that belong to the same project.
+        labels = await resolve_labels(workspaces, cfg)
+        graph.relabel(labels)
+        projects = await load_projects(cfg, workspaces, subscription_store=_subs())
+        relations = await load_relations(cfg, workspaces, subscription_store=_subs())
+        graph.edges.extend(
+            relate_workspaces(labels, projects=projects, relations=relations)
         )
         return graph.to_dict()
 
@@ -350,13 +389,15 @@ def create_app(
                 "base_url": info.base_url,
                 "notes": info.notes,
                 # Ready if the env has the secret OR one is persisted in Postgres.
-                "ready": ready or info.id in stored_ids,
-                "active_env": active_env,
+                "ready": env_ready or info.id in stored_ids,
+                # Whether the secret is available from the environment (.env). This
+                # is independent of which provider is currently selected.
+                "env_ready": env_ready,
                 "stored": info.id in stored_ids,
                 "needs_secret": secret_field(info.id) is not None,
                 "selected": info.id == selected,
             }
-            for info, ready, active_env in provider_status(cfg)
+            for info, env_ready, _active in provider_status(cfg)
         ]
         return {
             "providers": providers,
@@ -437,6 +478,9 @@ def create_app(
                     "guild_id": s.guild_id,
                     "resume_thread_id": s.resume_thread_id,
                     "interval_seconds": s.interval_seconds,
+                    "project": s.project,
+                    "publish_default": s.publish_default,
+                    "related_to": list(s.related_to),
                     "active": s.active,
                     "created_at": s.created_at.isoformat(),
                 }
@@ -461,9 +505,47 @@ def create_app(
             guild_id=sub.guild_id or cfg.discord_guild_id,
             resume_thread_id=sub.resume_thread_id or cfg.discord_resume_thread_id,
             interval_seconds=sub.interval_seconds,
+            project=(sub.project.strip() if sub.project and sub.project.strip() else None),
+            publish_default=sub.publish_default,
+            related_to=[w.strip() for w in sub.related_to if w.strip()],
         )
         await _subs().add(subscription)
         return {"channel_id": subscription.channel_id, "workspace": subscription.workspace}
+
+    @app.patch("/api/subscriptions/{channel_id}")
+    async def api_edit_subscription(
+        channel_id: str, patch: SubscriptionPatch = Body(...)
+    ) -> dict[str, Any]:
+        current = await _subs().get(channel_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="subscription not found")
+        updates: dict[str, Any] = {}
+        fields = patch.model_dump(exclude_unset=True)
+        if "resume_thread_id" in fields:
+            value = patch.resume_thread_id
+            updates["resume_thread_id"] = value.strip() if value and value.strip() else None
+        if "interval_seconds" in fields:
+            updates["interval_seconds"] = patch.interval_seconds
+        if "project" in fields:
+            value = patch.project
+            updates["project"] = value.strip() if value and value.strip() else None
+        if "publish_default" in fields and patch.publish_default is not None:
+            updates["publish_default"] = patch.publish_default
+        if "related_to" in fields and patch.related_to is not None:
+            # Never relate a subscription to itself.
+            updates["related_to"] = [
+                w.strip()
+                for w in patch.related_to
+                if w.strip() and w.strip() != current.workspace
+            ]
+        updated = current.model_copy(update=updates)
+        await _subs().add(updated)
+        return {
+            "channel_id": updated.channel_id,
+            "project": updated.project,
+            "publish_default": updated.publish_default,
+            "related_to": list(updated.related_to),
+        }
 
     @app.delete("/api/subscriptions/{channel_id}")
     async def api_remove_subscription(channel_id: str) -> dict[str, Any]:

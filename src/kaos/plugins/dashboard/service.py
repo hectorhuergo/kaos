@@ -84,6 +84,54 @@ async def load_knowledge(
     return workspaces, graph, sections
 
 
+async def load_projects(
+    settings: Settings,
+    workspaces: Sequence[str],
+    *,
+    subscription_store: SubscriptionStore | None = None,
+) -> dict[str, str | None]:
+    """Map each workspace in view to its subscription's ``project`` (if any).
+
+    Feeds the explicit cross-workspace relations (ADR-0019): workspaces sharing a
+    project are linked in the graph. Only workspaces present in ``workspaces`` are
+    returned. ``subscription_store`` can be injected to reuse a shared store.
+    """
+    store = subscription_store or build_subscription_store(settings)
+    try:
+        subs = await store.list(active_only=True)
+    finally:
+        if subscription_store is None:
+            await _close(store)
+    wanted = set(workspaces)
+    return {s.workspace: s.project for s in subs if s.workspace in wanted}
+
+
+async def load_relations(
+    settings: Settings,
+    workspaces: Sequence[str],
+    *,
+    subscription_store: SubscriptionStore | None = None,
+) -> dict[str, list[str]]:
+    """Map each in-view workspace to the workspaces it is explicitly related to.
+
+    Feeds the ad-hoc ``related_to`` edges an operator sets per subscription. Both
+    endpoints are restricted to the workspaces in view. ``subscription_store`` can
+    be injected to reuse a shared store.
+    """
+    store = subscription_store or build_subscription_store(settings)
+    try:
+        subs = await store.list(active_only=True)
+    finally:
+        if subscription_store is None:
+            await _close(store)
+    wanted = set(workspaces)
+    return {
+        s.workspace: [w for w in s.related_to if w in wanted]
+        for s in subs
+        if s.workspace in wanted and s.related_to
+    }
+
+
 def artifacts_to_dicts(artifacts: Sequence[Artifact]) -> list[dict[str, object]]:
     """Serialize artifacts for the JSON API (ids and datetimes as strings)."""
     return [

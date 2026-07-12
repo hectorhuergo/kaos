@@ -102,3 +102,70 @@ def test_deactivate_hides_from_active_list() -> None:
 
     asyncio.run(scenario())
 
+
+def test_publish_default_true_and_related_empty_by_default() -> None:
+    sub = Subscription(workspace="discord:1", channel_id="1")
+    assert sub.publish_default is True  # automated runs publish unless turned off
+    assert sub.related_to == []
+
+
+def test_publish_default_and_related_roundtrip() -> None:
+    store = InMemorySubscriptionStore()
+
+    async def scenario() -> None:
+        sub = _sub("1").model_copy(
+            update={"publish_default": False, "related_to": ["github:acme/kaos"]}
+        )
+        await store.add(sub)
+        got = await store.get("1")
+        assert got is not None
+        assert got.publish_default is False
+        assert got.related_to == ["github:acme/kaos"]
+
+    asyncio.run(scenario())
+
+
+def test_run_subscriptions_publishes_only_when_publish_default() -> None:
+    """The scheduler run posts to Discord only for publish_default subscriptions.
+
+    A subscription with ``publish_default=False`` is still run (real storage), but
+    a capture/console publisher is injected so nothing is posted — knowledge-only.
+    """
+    from kaos.cli import subscriptions as subs_mod
+    from kaos.plugins.publishers import ConsolePublisher
+
+    store = InMemorySubscriptionStore()
+    seen: dict[str, object] = {}
+
+    async def fake_runner(sub, *, dry_run, consolidated, force, settings, publisher=None):  # type: ignore[no-untyped-def]
+        seen[sub.channel_id] = publisher
+        return 0
+
+    async def scenario() -> None:
+        await store.add(_sub("posts").model_copy(update={"publish_default": True}))
+        await store.add(_sub("quiet").model_copy(update={"publish_default": False}))
+
+    asyncio.run(scenario())
+
+    import kaos.bootstrap.factory as factory
+
+    original = factory.build_subscription_store
+    factory.build_subscription_store = lambda _s: store  # type: ignore[assignment]
+    subs_mod.build_subscription_store = lambda _s: store  # type: ignore[assignment]
+    runners = dict(subs_mod.SUBSCRIPTION_RUNNERS)
+    subs_mod.SUBSCRIPTION_RUNNERS.update({FORUM: fake_runner})
+    try:
+        from kaos.core.config import Settings
+
+        asyncio.run(subs_mod.run_subscriptions(settings=Settings(discord_token="t")))
+    finally:
+        factory.build_subscription_store = original  # type: ignore[assignment]
+        subs_mod.build_subscription_store = original  # type: ignore[assignment]
+        subs_mod.SUBSCRIPTION_RUNNERS.clear()
+        subs_mod.SUBSCRIPTION_RUNNERS.update(runners)
+
+    # publish_default → default publisher (None, backfill posts); else console.
+    assert seen["posts"] is None
+    assert isinstance(seen["quiet"], ConsolePublisher)
+
+

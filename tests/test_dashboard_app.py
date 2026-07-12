@@ -107,6 +107,113 @@ def test_api_artifacts_returns_all_versions_of_a_thread() -> None:
     assert "llama3.2:3b" in html_doc and "qwen2.5:3b" in html_doc
 
 
+def test_api_knowledge_relates_same_project_workspaces() -> None:
+    """Workspaces of one project are connected; an unrelated repo stays apart."""
+    from kaos.domain.subscription import GITHUB, Subscription
+    from kaos.runtime import InMemorySubscriptionStore
+
+    subs = InMemorySubscriptionStore()
+
+    async def seed() -> None:
+        for channel in ("acme/proyecto-x-grid", "acme/proyecto-x-api", "acme/kaos"):
+            await subs.add(
+                Subscription(
+                    workspace=Subscription.workspace_for_kind(GITHUB, channel),
+                    kind=GITHUB,
+                    channel_id=channel,
+                )
+            )
+
+    asyncio.run(seed())
+    # No Discord token → labels fall back to the readable ``owner/repo``.
+    client = TestClient(
+        create_app(Settings(), storage=InMemoryStorage(), subscription_store=subs)
+    )
+    data = client.get("/api/knowledge").json()
+    related = [e for e in data["edges"] if e["kind"] == "related_to"]
+    pairs = {tuple(sorted((e["source"], e["target"]))) for e in related}
+    assert (
+        "github:acme/proyecto-x-api",
+        "github:acme/proyecto-x-grid",
+    ) in pairs
+    # kaos is on its own island.
+    assert not any("github:acme/kaos" in pair for pair in pairs)
+
+
+def test_api_knowledge_relates_by_explicit_project() -> None:
+    """A workspace grouped by explicit project joins it despite an unrelated name."""
+    from kaos.domain.subscription import GITHUB, Subscription
+    from kaos.runtime import InMemorySubscriptionStore
+
+    subs = InMemorySubscriptionStore()
+
+    async def seed() -> None:
+        # 'kaos' shares no name prefix with the forum, but it's the brain of
+        # proyecto-x → grouped by explicit project.
+        await subs.add(
+            Subscription(
+                workspace="discord:1",  # forum (no token → raw id label)
+                kind="forum",
+                channel_id="1",
+                project="proyecto-x",
+            )
+        )
+        await subs.add(
+            Subscription(
+                workspace=Subscription.workspace_for_kind(GITHUB, "acme/kaos"),
+                kind=GITHUB,
+                channel_id="acme/kaos",
+                project="proyecto-x",
+            )
+        )
+
+    asyncio.run(seed())
+    client = TestClient(
+        create_app(Settings(), storage=InMemoryStorage(), subscription_store=subs)
+    )
+    data = client.get("/api/knowledge").json()
+    related = [e for e in data["edges"] if e["kind"] == "related_to"]
+    pairs = {tuple(sorted((e["source"], e["target"]))) for e in related}
+    assert ("discord:1", "github:acme/kaos") in pairs
+
+
+def test_api_knowledge_relates_by_explicit_relation() -> None:
+    """An operator-set ``related_to`` connects two otherwise-unrelated workspaces."""
+    from kaos.domain.subscription import GITHUB, Subscription
+    from kaos.runtime import InMemorySubscriptionStore
+
+    subs = InMemorySubscriptionStore()
+
+    async def seed() -> None:
+        await subs.add(
+            Subscription(
+                workspace="discord:7",  # 'soporte' forum, unrelated name
+                kind="forum",
+                channel_id="7",
+                related_to=["github:acme/kaos"],
+            )
+        )
+        await subs.add(
+            Subscription(
+                workspace=Subscription.workspace_for_kind(GITHUB, "acme/kaos"),
+                kind=GITHUB,
+                channel_id="acme/kaos",
+            )
+        )
+
+    asyncio.run(seed())
+    client = TestClient(
+        create_app(Settings(), storage=InMemoryStorage(), subscription_store=subs)
+    )
+    data = client.get("/api/knowledge").json()
+    pairs = {
+        tuple(sorted((e["source"], e["target"])))
+        for e in data["edges"]
+        if e["kind"] == "related_to"
+    }
+    assert ("discord:7", "github:acme/kaos") in pairs
+
+
 def _later(ts: object) -> object:
     from datetime import timedelta
 

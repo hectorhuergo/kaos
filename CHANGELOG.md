@@ -1,6 +1,34 @@
 # Changelog
 
 ## Unreleased
+- Knowledge graph — Cross-Workspace Relations (project graph): workspaces are no
+  longer isolated islands. A new `related_to` edge connects workspaces of the same
+  project via three deterministic (no-LLM) signals in
+  `kaos.core.knowledge.relate_workspaces(labels, *, projects=None, relations=None)`:
+  (1) an explicit **`project`** grouping on subscriptions (so `kaos`, the *brain*
+  of `proyecto-x`, joins the project despite its unrelated name), (2) ad-hoc
+  **`related_to`** links an operator sets per subscription, and (3) a name-prefix
+  heuristic (`proyecto-x` ↔ `proyecto-x-grid`). Graph nodes now render friendly
+  workspace names (`KnowledgeGraph.relabel`) instead of the raw `discord:<id>`.
+  Applied on the live dashboard (`GET /`, `/api/knowledge`) and the CLI
+  (`kaos knowledge`/`dashboard`). ADR-0019.
+- Subscriptions — project, relations & publish default: `Subscription` gains
+  `project`, `related_to` (workspace list) and `publish_default` (persisted;
+  `text`/`text[]`/`boolean` columns with `ADD COLUMN IF NOT EXISTS` migrations).
+  `publish_default` (default `true`) gates whether an **automated** run (scheduler
+  / `kaos run`) posts to Discord — off keeps a subscription *knowledge-only*
+  (still summarized and persisted). Editable via `kaos subscribe … --project …
+  --related … [--no-publish]`, the console form, inline **"Editar"** per card, and
+  a new **`PATCH /api/subscriptions/{channel_id}`** partial-update route.
+- Fix — subscription resume thread vs `.env`: the console run path
+  (`dashboard.execute.run_subscription`) now honors each subscription's
+  `resume_thread_id` over the global `KAOS_DISCORD_RESUME_THREAD_ID`, matching the
+  CLI `run_subscriptions` precedence.
+- Fix — GitHub Models credential detection in the console: the providers panel
+  used the *selected*-provider flag to decide "credencial en .env", so a
+  `KAOS_GITHUB_TOKEN` present in the environment showed as "sin credencial" when
+  another provider was active. `GET /api/providers` now exposes a correct
+  `env_ready` flag and the console reads it.
 - Console — run & publish + "run all": the run action gains a **publish** toggle
   (route `POST /api/run/subscription` accepts `publish`; a `_TeePublisher`
   publishes to Discord *and* captures for display) and a new **`POST /api/run/all`**

@@ -142,6 +142,30 @@ def test_set_provider_rejects_unknown(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_github_env_ready_when_token_in_env_though_not_selected() -> None:
+    """GitHub Models must read as ready when its token is in .env (env_ready).
+
+    Regression: the console pill used to key off the *selected* provider, so a
+    GitHub token present in the environment showed as "sin credencial" whenever
+    another provider (e.g. openai) was active.
+    """
+    app = create_app(
+        Settings(github_token="ghp_env", llm_provider="openai"),
+        storage=InMemoryStorage(),
+        subscription_store=InMemorySubscriptionStore(),
+        config_store=InMemoryConfigStore(),
+        credential_store=InMemoryCredentialStore(),
+    )
+    client = TestClient(app)
+    github = next(
+        p for p in client.get("/api/providers").json()["providers"] if p["id"] == "github"
+    )
+    assert github["selected"] is False  # openai is active, not github
+    assert github["env_ready"] is True  # …but the token is in .env
+    assert github["ready"] is True
+    assert github["stored"] is False
+
+
 def test_credential_persists_and_marks_stored(client: TestClient) -> None:
     # Without a credential and without env secrets, openai is not ready.
     before = next(
@@ -213,6 +237,72 @@ def test_subscription_crud_roundtrip(client: TestClient) -> None:
     resp = client.delete("/api/subscriptions/123")
     assert resp.status_code == 200
     assert client.get("/api/subscriptions").json()["subscriptions"] == []
+
+
+def test_subscription_project_roundtrip(client: TestClient) -> None:
+    resp = client.post(
+        "/api/subscriptions",
+        json={"channel_id": "acme/kaos", "kind": "github", "project": "proyecto-x"},
+    )
+    assert resp.status_code == 201
+    subs = client.get("/api/subscriptions").json()["subscriptions"]
+    assert subs[0]["project"] == "proyecto-x"
+    # A blank project is stored as null, not "".
+    resp = client.post(
+        "/api/subscriptions",
+        json={"channel_id": "acme/other", "kind": "github", "project": "  "},
+    )
+    assert resp.status_code == 201
+    other = next(
+        s
+        for s in client.get("/api/subscriptions").json()["subscriptions"]
+        if s["channel_id"] == "acme/other"
+    )
+    assert other["project"] is None
+
+
+def test_subscription_publish_default_and_relations_roundtrip(client: TestClient) -> None:
+    resp = client.post(
+        "/api/subscriptions",
+        json={
+            "channel_id": "acme/kaos",
+            "kind": "github",
+            "publish_default": False,
+            "related_to": ["discord:1"],
+        },
+    )
+    assert resp.status_code == 201
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["publish_default"] is False
+    assert sub["related_to"] == ["discord:1"]
+
+
+def test_subscription_defaults_publish_true(client: TestClient) -> None:
+    client.post("/api/subscriptions", json={"channel_id": "1", "kind": "forum"})
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["publish_default"] is True  # historical behavior preserved
+    assert sub["related_to"] == []
+
+
+def test_subscription_patch_edits_fields(client: TestClient) -> None:
+    client.post("/api/subscriptions", json={"channel_id": "1", "kind": "forum"})
+    resp = client.patch(
+        "/api/subscriptions/1",
+        json={"project": "proyecto-x", "publish_default": False, "related_to": ["discord:9"]},
+    )
+    assert resp.status_code == 200
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["project"] == "proyecto-x"
+    assert sub["publish_default"] is False
+    assert sub["related_to"] == ["discord:9"]
+    # A subscription is never related to itself.
+    client.patch("/api/subscriptions/1", json={"related_to": ["discord:1", "discord:9"]})
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["related_to"] == ["discord:9"]
+
+
+def test_subscription_patch_missing_is_404(client: TestClient) -> None:
+    assert client.patch("/api/subscriptions/nope", json={"project": "x"}).status_code == 404
 
 
 def test_subscription_rejects_bad_kind(client: TestClient) -> None:
@@ -476,5 +566,65 @@ def test_run_all_route_runs_every_subscription(client: TestClient, monkeypatch) 
     assert body["persisted"] is True
     assert sorted(ran) == ["a", "b"]
     assert len(body["artifacts"]) == 2
+
+
+def test_run_subscription_resume_thread_overrides_global(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A subscription's resume thread wins over KAOS_DISCORD_RESUME_THREAD_ID."""
+    from kaos.domain.subscription import FORUM, Subscription
+    from kaos.plugins.dashboard.execute import run_subscription
+
+    # Global default from the environment/.env.
+    settings = Settings(discord_token="t", discord_resume_thread_id="GLOBAL")
+    store = InMemorySubscriptionStore()
+
+    seen: dict[str, object] = {}
+
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+        seen["thread_id"] = settings.discord_resume_thread_id
+        return 0
+
+    async def scenario() -> None:
+        await store.add(
+            Subscription(
+                workspace=Subscription.workspace_for_kind(FORUM, "123"),
+                kind=FORUM,
+                channel_id="123",
+                resume_thread_id="SUB",  # per-subscription target
+            )
+        )
+        await run_subscription(settings, "123", subscription_store=store)
+
+    monkeypatch.setattr("kaos.plugins.dashboard.execute.run_forum_backfill", fake_forum)
+    asyncio.run(scenario())
+    assert seen["thread_id"] == "SUB"  # subscription value wins over the global
+
+
+def test_run_subscription_falls_back_to_global_resume_thread(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Without a per-subscription thread, the global default is used."""
+    from kaos.domain.subscription import FORUM, Subscription
+    from kaos.plugins.dashboard.execute import run_subscription
+
+    settings = Settings(discord_token="t", discord_resume_thread_id="GLOBAL")
+    store = InMemorySubscriptionStore()
+    seen: dict[str, object] = {}
+
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+        seen["thread_id"] = settings.discord_resume_thread_id
+        return 0
+
+    async def scenario() -> None:
+        await store.add(
+            Subscription(
+                workspace=Subscription.workspace_for_kind(FORUM, "123"),
+                kind=FORUM,
+                channel_id="123",
+                resume_thread_id=None,  # no per-subscription target
+            )
+        )
+        await run_subscription(settings, "123", subscription_store=store)
+
+    monkeypatch.setattr("kaos.plugins.dashboard.execute.run_forum_backfill", fake_forum)
+    asyncio.run(scenario())
+    assert seen["thread_id"] == "GLOBAL"
 
 

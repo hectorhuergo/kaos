@@ -38,6 +38,21 @@ class Subscription(BaseModel):
     guild_id: str | None = None
     resume_thread_id: str | None = None
     active: bool = True
+    # Whether an *automated* run (the scheduler / ``kaos run``) publishes this
+    # subscription's summary to Discord. Defaults to ``True`` (the historical
+    # behavior). Turn it off to keep a subscription "knowledge-only": it is still
+    # summarized and persisted, but not posted. The interactive console run keeps
+    # its own explicit publish toggle, independent of this default.
+    publish_default: bool = True
+    # Optional project grouping: workspaces that share the same ``project`` are
+    # related in the knowledge graph (Cross-Workspace Relations, ADR-0019), even
+    # when their names don't share a prefix — e.g. the ``kaos`` repo (the brain)
+    # grouped under the ``proyecto-x`` project alongside its forum and repos.
+    project: str | None = None
+    # Explicit, ad-hoc relations to other subscriptions (by workspace id). Adds
+    # ``related_to`` edges in the graph beyond project/name grouping, so an
+    # operator can connect two workspaces that neither share a name nor a project.
+    related_to: list[str] = Field(default_factory=list)
     # Execution plan: how often the scheduler should run this subscription, in
     # seconds. ``None`` means "every scheduler pass" (the global cadence). The
     # plan lives with the thing being watched — there is no separate plan store.

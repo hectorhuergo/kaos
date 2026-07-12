@@ -128,6 +128,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0016 — Scheduler Execution Plan (per-subscription cadence)
 - ADR-0017 — Console: Agent Catalog, Prompt Augmentation & Interactive Run
 - ADR-0018 — Friendly Names, Dashboard Header & Persisted Agent Prompts
+- ADR-0019 — Cross-Workspace Relations (Project Graph)
 
 ### RFC
 

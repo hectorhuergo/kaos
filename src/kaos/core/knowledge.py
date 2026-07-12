@@ -13,8 +13,9 @@ and exported to a plain dict (JSON) or Mermaid for a dashboard.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+import re
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.storage import Storage
@@ -27,6 +28,7 @@ EVENT = "event"
 # Edge kinds.
 CONTAINS = "contains"          # workspace -> artifact
 DERIVED_FROM = "derived_from"  # artifact  -> event
+RELATED_TO = "related_to"      # workspace <-> workspace (shared project name)
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,22 @@ class KnowledgeGraph:
 
     def add_edge(self, edge: KnowledgeEdge) -> None:
         self.edges.append(edge)
+
+    def relabel(self, labels: Mapping[str, str]) -> None:
+        """Replace node labels by id with friendly names (in place).
+
+        The projection is built with canonical ids as labels (``discord:123``)
+        because the Core stays agnostic of any provider's naming. A view that can
+        resolve friendly names (e.g. the dashboard, via the Discord REST API)
+        applies them here so the rendered graph shows the channel/forum name
+        instead of the raw workspace id — without leaking that lookup into Core.
+        """
+        if not labels:
+            return
+        self.nodes = [
+            replace(node, label=labels[node.id]) if node.id in labels else node
+            for node in self.nodes
+        ]
 
     def to_dict(self) -> dict[str, list[dict[str, object]]]:
         """Return a JSON-serializable representation of the graph."""
@@ -232,6 +250,100 @@ def group_artifacts(artifacts: Sequence[Artifact]) -> list[list[Artifact]]:
     return [
         sorted(groups[key], key=lambda a: a.timestamp, reverse=True) for key in order
     ]
+
+
+def _project_tokens(label: str) -> list[str]:
+    """Tokens of a workspace's project name (its most specific path segment).
+
+    GitHub labels read as ``owner/repo``; only the repo carries the project name,
+    so we keep the last ``/`` segment. The name is lower-cased and split on any
+    non-alphanumeric run, so ``proyecto-x-grid`` → ``["proyecto", "x", "grid"]``.
+    """
+    name = label.rsplit("/", 1)[-1]
+    return [tok for tok in re.split(r"[^0-9a-z]+", name.lower()) if tok]
+
+
+def _shared_leading(a: Sequence[str], b: Sequence[str]) -> int:
+    """How many leading tokens two token lists share."""
+    count = 0
+    for left, right in zip(a, b, strict=False):
+        if left != right:
+            break
+        count += 1
+    return count
+
+
+def relate_workspaces(
+    labels: Mapping[str, str],
+    *,
+    projects: Mapping[str, str | None] | None = None,
+    relations: Mapping[str, Iterable[str]] | None = None,
+    min_shared_tokens: int = 2,
+) -> list[KnowledgeEdge]:
+    """Link workspaces that belong to the same project or are explicitly related.
+
+    Three complementary signals produce a ``related_to`` edge:
+
+    1. **Explicit grouping** (authoritative): when ``projects`` maps workspaces to
+       a project name, every pair sharing the same (case-insensitive) project is
+       linked. This is how a workspace whose name shares nothing with the others
+       — e.g. the ``kaos`` repo, the *brain* of ``proyecto-x`` — still joins the
+       project (ADR-0019).
+    2. **Explicit relations** (ad-hoc): ``relations`` maps a workspace to the
+       other workspaces it is explicitly related to, linking pairs an operator
+       connected by hand even when they share neither name nor project.
+    3. **Name heuristic**: two workspaces whose names (the most specific path
+       segment, tokenized) share at least ``min_shared_tokens`` leading tokens are
+       linked — e.g. the forum ``proyecto-x`` and the repo ``proyecto-x-grid``.
+
+    All are deterministic (no LLM, no network) and turn the otherwise-isolated
+    per-workspace islands into a connected view. Edges are undirected: a single
+    edge per pair is emitted with the workspace ids in a stable (sorted) order,
+    deduplicated across all signals, and restricted to workspaces present in
+    ``labels`` (the ones in view). Callers pass already-resolved labels, keeping
+    the Core agnostic of how names are looked up.
+    """
+    known = set(labels)
+    pairs: set[tuple[str, str]] = set()
+
+    # 1) Explicit project grouping.
+    if projects:
+        by_project: dict[str, list[str]] = {}
+        for workspace, project in projects.items():
+            name = (project or "").strip().lower()
+            if name and workspace in known:
+                by_project.setdefault(name, []).append(workspace)
+        for members in by_project.values():
+            for i, ws_a in enumerate(members):
+                for ws_b in members[i + 1 :]:
+                    pairs.add(_ordered_pair(ws_a, ws_b))
+
+    # 2) Explicit ad-hoc relations between subscriptions.
+    if relations:
+        for workspace, others in relations.items():
+            if workspace not in known:
+                continue
+            for other in others:
+                if other in known and other != workspace:
+                    pairs.add(_ordered_pair(workspace, other))
+
+    # 3) Name-prefix heuristic.
+    tokens = {ws: _project_tokens(label) for ws, label in labels.items()}
+    workspaces = list(labels)
+    for i, ws_a in enumerate(workspaces):
+        for ws_b in workspaces[i + 1 :]:
+            if _shared_leading(tokens[ws_a], tokens[ws_b]) >= min_shared_tokens:
+                pairs.add(_ordered_pair(ws_a, ws_b))
+
+    return [
+        KnowledgeEdge(source=source, target=target, kind=RELATED_TO)
+        for source, target in sorted(pairs)
+    ]
+
+
+def _ordered_pair(a: str, b: str) -> tuple[str, str]:
+    """Return the two ids in a stable (sorted) order for dedup/undirected edges."""
+    return (a, b) if a <= b else (b, a)
 
 
 def _add_event_nodes(
