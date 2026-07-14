@@ -154,7 +154,7 @@ async def load_settings(base: Settings | None = None) -> Settings:
 def build_llm(settings: Settings) -> LLMProvider:
     """Select the LLM provider from configuration."""
     if settings.llm_provider == "github":
-        token = settings.github_token or settings.llm_api_key
+        token = settings.github_token
         if not token:
             raise ValueError(
                 "KAOS_GITHUB_TOKEN is required for the 'github' LLM provider"
@@ -163,7 +163,7 @@ def build_llm(settings: Settings) -> LLMProvider:
             token=token, model=settings.llm_model, timeout=settings.llm_timeout
         )
     if settings.llm_provider == "anthropic":
-        key = settings.anthropic_api_key or settings.llm_api_key
+        key = settings.anthropic_api_key
         if not key:
             raise ValueError(
                 "KAOS_ANTHROPIC_API_KEY is required for the 'anthropic' LLM provider"

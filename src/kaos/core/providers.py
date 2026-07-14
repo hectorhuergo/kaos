@@ -86,6 +86,12 @@ _SECRET_FIELD: dict[str, str] = {
     "anthropic": "anthropic_api_key",
 }
 
+_SECRET_ENV: dict[str, tuple[str, ...]] = {
+    "openai": ("KAOS_LLM_API_KEY",),
+    "github": ("KAOS_GITHUB_TOKEN", "GITHUB_TOKEN"),
+    "anthropic": ("KAOS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+}
+
 
 def secret_field(provider_id: str) -> str | None:
     """Return the Settings field holding ``provider_id``'s secret, if any.
@@ -95,12 +101,26 @@ def secret_field(provider_id: str) -> str | None:
     return _SECRET_FIELD.get(provider_id)
 
 
+def secret_sources(provider_id: str, settings: Settings) -> tuple[str, ...]:
+    """Return the actual secret source names that make ``provider_id`` ready.
+
+    Each provider carries its own credential — there is no cross-provider
+    fallback to ``KAOS_LLM_API_KEY`` — so the reported source is always the
+    provider's own env var(s), and only when its secret is actually set.
+    """
+    field = secret_field(provider_id)
+    if field and getattr(settings, field, None):
+        return _SECRET_ENV.get(provider_id, (field,))
+    return ()
+
+
 def is_ready(provider_id: str, settings: Settings) -> bool:
     """Whether ``provider_id`` has the credential it needs to run.
 
     Readiness is expressed against :class:`Settings` (already resolved from the
     environment) rather than raw env names, matching how ``build_llm`` selects
-    the secret for each provider.
+    the secret for each provider. Every provider uses its own credential; there
+    is no fallback to the generic ``KAOS_LLM_API_KEY`` for github/anthropic.
     """
     if provider_id == "echo":
         return True
@@ -108,9 +128,9 @@ def is_ready(provider_id: str, settings: Settings) -> bool:
         # Local server; no credential required (it must be running to serve).
         return True
     if provider_id == "github":
-        return bool(settings.github_token or settings.llm_api_key)
+        return bool(settings.github_token)
     if provider_id == "anthropic":
-        return bool(settings.anthropic_api_key or settings.llm_api_key)
+        return bool(settings.anthropic_api_key)
     if provider_id == "openai":
         return bool(settings.llm_api_key)
     return False

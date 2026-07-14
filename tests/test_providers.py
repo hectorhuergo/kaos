@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from kaos.core.config import LLM_PROVIDERS, Settings
-from kaos.core.providers import CATALOG, is_ready, provider_status
+from kaos.core.providers import CATALOG, is_ready, provider_status, secret_sources
 
 
 def test_catalog_covers_every_configured_provider() -> None:
@@ -14,15 +14,33 @@ def test_echo_is_always_ready() -> None:
     assert is_ready("echo", Settings()) is True
 
 
-def test_github_ready_with_token_or_llm_key() -> None:
+def test_github_requires_its_own_token() -> None:
     assert is_ready("github", Settings()) is False
     assert is_ready("github", Settings(github_token="ghp_x")) is True
-    assert is_ready("github", Settings(llm_api_key="k")) is True
+    # No cross-provider fallback: the generic OpenAI key does not enable GitHub.
+    assert is_ready("github", Settings(llm_api_key="k")) is False
 
 
 def test_anthropic_ready_with_key() -> None:
     assert is_ready("anthropic", Settings()) is False
     assert is_ready("anthropic", Settings(anthropic_api_key="sk-ant")) is True
+    # No cross-provider fallback to the generic OpenAI key.
+    assert is_ready("anthropic", Settings(llm_api_key="k")) is False
+
+
+def test_secret_sources_report_only_the_providers_own_env() -> None:
+    # Without its own secret set there is no source (no generic fallback).
+    assert secret_sources("anthropic", Settings(llm_api_key="k")) == ()
+    assert secret_sources("github", Settings(llm_api_key="k")) == ()
+    assert secret_sources("anthropic", Settings(anthropic_api_key="sk-ant")) == (
+        "KAOS_ANTHROPIC_API_KEY",
+        "ANTHROPIC_API_KEY",
+    )
+    assert secret_sources("github", Settings(github_token="ghp_x")) == (
+        "KAOS_GITHUB_TOKEN",
+        "GITHUB_TOKEN",
+    )
+    assert secret_sources("openai", Settings(llm_api_key="sk")) == ("KAOS_LLM_API_KEY",)
 
 
 def test_openai_ready_with_llm_key() -> None:

@@ -9,7 +9,7 @@ use. Secrets themselves are never printed — only whether they are configured.
 from __future__ import annotations
 
 from kaos.core.config import Settings
-from kaos.core.providers import provider_status
+from kaos.core.providers import provider_status, secret_sources
 
 
 def list_providers(*, settings: Settings | None = None) -> int:
@@ -25,7 +25,11 @@ def list_providers(*, settings: Settings | None = None) -> int:
         print(f"     {info.label} · {endpoint}")
         print(f"     {info.notes}")
         if info.secret_env:
-            print(f"     credencial: {' | '.join(info.secret_env)}")
+            sources = secret_sources(info.id, settings)
+            if sources:
+                print(f"     credencial en .env: {' | '.join(sources)}")
+            else:
+                print(f"     credencial requerida: {' | '.join(info.secret_env)}")
         print()
     print("→ = proveedor activo (KAOS_LLM_PROVIDER). Selecciona con "
           "KAOS_LLM_PROVIDER=<id> y KAOS_LLM_MODEL=<modelo>.")
