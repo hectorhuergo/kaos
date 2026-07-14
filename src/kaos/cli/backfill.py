@@ -29,6 +29,7 @@ from kaos.plugins.connectors import (
     DiscordConnector,
     list_forum_threads,
 )
+from kaos.plugins.dashboard.chat import contribution_ids, load_contributions
 from kaos.plugins.publishers import ConsolePublisher
 from kaos.runtime import InMemoryStorage, KaosRuntime
 
@@ -73,6 +74,10 @@ async def run_backfill(
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     )
+
+    # Weigh human contributions from the chat when re-summarizing this channel.
+    workspace = f"discord:{channel_id}"
+    runtime.prime_workspace(workspace, await load_contributions(storage, workspace))
 
     print(f"KAOS backfill — channel {channel_id} (dry_run={dry_run})\n")
     await runtime.start()
@@ -145,6 +150,12 @@ async def run_forum_backfill(
     msg_limit = limit if limit is not None else settings.discord_message_limit
     model = settings.llm_model
 
+    # Human contributions made from the chat enrich every thread's context and,
+    # by folding their stable ids into the fingerprint, invalidate the cache when
+    # a new aporte is added.
+    contributions = await load_contributions(storage, workspace)
+    contrib_ids = contribution_ids(contributions)
+
     # Collected per-thread summaries for the consolidated report.
     summaries: list[tuple[str, str, Artifact]] = []
     changed = 0  # threads that were (re)summarized this run
@@ -196,7 +207,7 @@ async def run_forum_backfill(
                     continue
 
                 fingerprint = content_fingerprint(
-                    [str(e.payload.get("message_id", "")) for e in events],
+                    [str(e.payload.get("message_id", "")) for e in events] + list(contrib_ids),
                     prompt_signature=agent.prompt_signature(),
                 )
 
@@ -212,7 +223,10 @@ async def run_forum_backfill(
                     print(f"· {name}: resumiendo con {model}…", flush=True)
                     try:
                         artifacts = await agent.run(
-                            Context(workspace=workspace, events=tuple(events))
+                            Context(
+                                workspace=workspace,
+                                events=tuple(events) + tuple(contributions),
+                            )
                         )
                     except httpx.HTTPStatusError as exc:
                         print(

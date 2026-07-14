@@ -1,6 +1,28 @@
 # Changelog
 
 ## Unreleased
+- Chat over knowledge & artifact threads: the console chat is no longer a silo —
+  it enriches and reuses the same knowledge (artifacts + events). `POST
+  /api/chat/send` accepts `about_artifact` to anchor a chat on **any** stored
+  artifact; the sidebar lists all knowledge with a simple search, friendly titles
+  (`artifact_friendly_title`) and last-activity dates (`artifact_last_activity`).
+  Human chat messages become synthetic `message.contribution` events
+  (`load_contributions`) that `ResumeAgent` folds into the next summary (with
+  `contribution_id` in the cache fingerprint). Tool-using agents (Dev Agent) run a
+  tool loop from the chat. `ResumeAgent` now embeds the originating transcript in
+  the artifact (`content["messages"]`, redacted), so the thread is self-contained
+  across connectors and re-runs. New `GET /api/artifacts/thread` returns that
+  thread paginated backwards (infinite scroll), with a fallback to `source_events`
+  then workspace `message.*` for pre-existing artifacts. The chat knowledge list
+  groups artifacts by logical subject (`workspace + kind + thread_name`, same key
+  as the dashboard) so a thread's many summary versions collapse into one entry,
+  navigable with **◀/▶** version arrows (each reconstructing its full thread);
+  list ordered newest-first, thread opens pinned to the latest message. Console: provider/model
+  **catalog** pills moved next to "Nueva sesión" and reflect the selection;
+  metrics split into plain stats (Assets/Artefactos/Última ejecución/Sesiones/
+  Mensajes) vs. Agentes/Modelos pills; nav regrouped (Chat/Subscriptions/
+  Dashboards/Vista previa top-level, Providers+Agentes under **Configuración**),
+  global collapsible sidebar. ADR-0020.
 - Knowledge graph — Cross-Workspace Relations (project graph): workspaces are no
   longer isolated islands. A new `related_to` edge connects workspaces of the same
   project via three deterministic (no-LLM) signals in

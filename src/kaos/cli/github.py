@@ -15,6 +15,7 @@ from kaos.contracts.publisher import Publisher
 from kaos.core.config import Settings
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import GitHubConnector, GitHubRestSource
+from kaos.plugins.dashboard.chat import load_contributions
 from kaos.plugins.publishers import ConsolePublisher
 from kaos.runtime import InMemoryStorage, KaosRuntime
 
@@ -60,6 +61,11 @@ async def run_github(
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     )
+
+    # Weigh human contributions made from the chat (any user message in this
+    # workspace) when re-summarizing.
+    workspace = f"github:{target}"
+    runtime.prime_workspace(workspace, await load_contributions(storage, workspace))
 
     print(f"KAOS github — {target} (dry_run={dry_run})\n")
     try:

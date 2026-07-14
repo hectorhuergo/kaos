@@ -12,6 +12,9 @@ Routes:
 - ``GET  /api/workspaces``           → the workspaces KAOS manages.
 - ``GET  /api/knowledge``            → the knowledge graph as JSON.
 - ``GET  /api/artifacts``            → the stored artifacts (optionally by ws).
+- ``GET  /api/chat/sessions``        → chat sessions derived from stored turns.
+- ``GET  /api/chat/thread``          → ordered messages of one chat session.
+- ``POST /api/chat/send``            → persist a chat turn and generate a reply.
 - ``GET  /api/agents``               → the catalog of agents KAOS ships.
 - ``PUT  /api/agents/{id}/instructions`` → persist an agent's extra prompt.
 - ``GET  /api/providers``            → LLM provider catalog + persisted choice.
@@ -47,19 +50,26 @@ from kaos.bootstrap.factory import (
 from kaos.core.agents import agent_catalog
 from kaos.core.config import LLM_PROVIDERS, Settings
 from kaos.core.knowledge import relate_workspaces
-from kaos.core.providers import provider_status, secret_field
+from kaos.core.providers import provider_status, secret_field, secret_sources
 from kaos.domain.provider_credential import ProviderCredential
 from kaos.domain.runtime_config import RuntimeConfig
 from kaos.domain.subscription import GITHUB, KINDS, Subscription
 from kaos.plugins.agents.dev_agent import BASE_PROMPT as DEV_BASE_PROMPT
 from kaos.plugins.agents.resume_agent import SYSTEM_PROMPT as RESUME_BASE_PROMPT
 from kaos.plugins.dashboard import render_dashboard
+from kaos.plugins.dashboard.chat import (
+    artifact_thread,
+    list_sessions,
+    send_message,
+    session_thread,
+)
 from kaos.plugins.dashboard.console import render_console
 from kaos.plugins.dashboard.directory import (
     resolve_header,
     resolve_labels,
 )
 from kaos.plugins.dashboard.execute import RunError, run_all, run_subscription
+from kaos.plugins.dashboard.metrics import summarize_workspace
 from kaos.plugins.dashboard.preview import (
     PreviewError,
     preview_github,
@@ -157,6 +167,20 @@ class AgentInstructionsInput(BaseModel):
     """Request body: the extra prompt instructions to persist for an agent."""
 
     instructions: str = ""
+
+
+class ChatInput(BaseModel):
+    """Request body: a chat turn to persist and answer."""
+
+    workspace: str
+    user_id: str
+    agent_id: str
+    message: str
+    project: str | None = None
+    kind: str = "conversation"
+    session_id: str | None = None
+    title: str | None = None
+    about_artifact: str | None = None
 
 
 async def _close(obj: object) -> None:
@@ -269,7 +293,12 @@ def create_app(
         workspaces, _graph, _sections = await load_knowledge(
             cfg, storage=_store(), subscription_store=_subs()
         )
-        return {"workspaces": workspaces, "labels": await resolve_labels(workspaces, cfg)}
+        labels = await resolve_labels(workspaces, cfg)
+        summaries: dict[str, dict[str, object]] = {}
+        for ws in workspaces:
+            artifacts = list(await _store().list_artifacts(ws))
+            summaries[ws] = summarize_workspace(artifacts)
+        return {"workspaces": workspaces, "labels": labels, "summaries": summaries}
 
     @app.get("/api/knowledge")
     async def api_knowledge(
@@ -393,6 +422,7 @@ def create_app(
                 # Whether the secret is available from the environment (.env). This
                 # is independent of which provider is currently selected.
                 "env_ready": env_ready,
+                "env_sources": secret_sources(info.id, cfg),
                 "stored": info.id in stored_ids,
                 "needs_secret": secret_field(info.id) is not None,
                 "selected": info.id == selected,
@@ -405,6 +435,67 @@ def create_app(
             "selected_model": selected_model,
             "persistent": bool(cfg.database_url),
         }
+
+    @app.get("/api/chat/sessions")
+    async def api_chat_sessions(
+        workspace: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        if workspace:
+            sessions = await list_sessions(_store(), workspace)
+            targets = [workspace]
+        else:
+            # Aggregate every workspace's sessions into one list (global view).
+            targets, _graph, _sections = await load_knowledge(
+                cfg, storage=_store(), subscription_store=_subs()
+            )
+            sessions = []
+            for ws in targets:
+                sessions.extend(await list_sessions(_store(), ws))
+            sessions.sort(key=lambda s: str(s.get("updated_at", "")), reverse=True)
+        labels = await resolve_labels(targets, cfg)
+        return {"workspace": workspace, "sessions": sessions, "labels": labels}
+
+    @app.get("/api/chat/thread")
+    async def api_chat_thread(
+        workspace: str = Query(...), session_id: str = Query(...)
+    ) -> dict[str, Any]:
+        messages = await session_thread(_store(), workspace, session_id)
+        return {
+            "workspace": workspace,
+            "session_id": session_id,
+            "messages": messages,
+        }
+
+    @app.get("/api/artifacts/thread")
+    async def api_artifact_thread(
+        workspace: str = Query(...),
+        artifact_id: str = Query(...),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=40, ge=1, le=200),
+    ) -> dict[str, Any]:
+        result = await artifact_thread(
+            _store(), workspace, artifact_id, offset=offset, limit=limit
+        )
+        return {"workspace": workspace, "artifact_id": artifact_id, **result}
+
+    @app.post("/api/chat/send")
+    async def api_chat_send(body: ChatInput = Body(...)) -> dict[str, Any]:
+        try:
+            return await send_message(
+                _store(),
+                cfg,
+                workspace=body.workspace,
+                user_id=body.user_id,
+                agent_id=body.agent_id,
+                message=body.message,
+                project=body.project,
+                kind=body.kind,
+                session_id=body.session_id,
+                title=body.title,
+                about_artifact=body.about_artifact,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.put("/api/config/provider")
     async def api_set_provider(choice: ProviderChoice = Body(...)) -> dict[str, Any]:

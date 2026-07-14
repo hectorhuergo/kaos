@@ -16,6 +16,7 @@ from datetime import datetime
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.event import utcnow
 from kaos.core.knowledge import KnowledgeGraph, group_artifacts
+from kaos.plugins.dashboard.metrics import summarize_workspace
 
 _STYLE = """
 :root{color-scheme:light dark}
@@ -47,6 +48,14 @@ pre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0;line-
 .chip{font-size:.75rem;padding:.2rem .55rem;border-radius:999px;border:1px solid #2f3646;color:#c9d1da;background:#0f1115}
 .chip b{color:#e6e6e6;font-weight:600}
 .ws-id{color:#5b6472;font-size:.75rem;font-weight:400;margin-left:.5rem}
+.kpis{display:flex;flex-direction:column;gap:.35rem;margin:.6rem 0 0}
+.kpi-stats{display:flex;flex-wrap:wrap;gap:.15rem 1.1rem;color:#8a93a2;font-size:.8rem}
+.kpi-stat .l{color:#6f7a89}
+.kpi-stat b{color:#e6e6e6;font-weight:600}
+.kpi-pills{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+.kpi{font-size:.75rem;padding:.18rem .52rem;border-radius:999px;border:1px solid #2f3646;color:#c9d1da;background:#0f1115}
+.kpi b{color:#fff;font-weight:600}
+.kpi-cat{color:#6f7a89;font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;margin-right:.1rem}
 .ver-nav{display:flex;align-items:center;gap:.6rem;margin:.1rem 0 .7rem}
 .ver-btn{background:#0f1115;border:1px solid #2f3646;color:#e6e6e6;border-radius:6px;padding:.15rem .55rem;cursor:pointer;font-size:.9rem}
 .ver-btn:hover{border-color:#4f8cff}
@@ -105,7 +114,10 @@ def render_dashboard(
         heading = html.escape(label)
         if label != workspace:
             heading += f"<span class='ws-id'>{html.escape(workspace)}</span>"
-        sections.append(f"<section><h2>{heading}</h2>\n{cards}</section>")
+        metrics = summarize_workspace(artifacts)
+        sections.append(
+            f"<section><h2>{heading}</h2>{_metrics_html(metrics)}\n{cards}</section>"
+        )
 
     mermaid = html.escape(graph.to_mermaid())
     return f"""<!doctype html>
@@ -199,6 +211,52 @@ def _indicators(
 
 def _chip(label: str, value: object) -> str:
     return f"<span class='chip'>{html.escape(label)} <b>{html.escape(str(value))}</b></span>"
+
+
+def _metrics_html(metrics: dict[str, object]) -> str:
+    stats = []
+    if metrics.get("asset_count") is not None:
+        stats.append(_stat("Assets", metrics["asset_count"]))
+    if metrics.get("artifact_count") is not None:
+        stats.append(_stat("Artefactos", metrics["artifact_count"]))
+    if metrics.get("last_execution"):
+        stats.append(_stat("Última ejecución", metrics["last_execution"]))
+    if metrics.get("session_count"):
+        stats.append(_stat("Sesiones", metrics["session_count"]))
+    if metrics.get("message_count"):
+        stats.append(_stat("Mensajes", metrics["message_count"]))
+    agents = _as_str_list(metrics.get("agent_labels") or metrics.get("agents"))
+    models = _as_str_list(metrics.get("models"))
+    pills = _kpi_group("Agentes", agents) + _kpi_group("Modelos", models)
+    stat_row = f"<div class='kpi-stats'>{''.join(stats)}</div>" if stats else ""
+    pill_row = f"<div class='kpi-pills'>{pills}</div>" if pills else ""
+    body = stat_row + pill_row
+    return f"<div class='kpis'>{body}</div>" if body else ""
+
+
+def _stat(label: str, value: object) -> str:
+    return (
+        f"<span class='kpi-stat'><span class='l'>{html.escape(label)}:</span> "
+        f"<b>{html.escape(str(value))}</b></span>"
+    )
+
+
+def _as_str_list(value: object) -> list[str]:
+    """Coerce a metrics value into a list of strings (empty when not a sequence)."""
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    return []
+
+
+def _kpi_group(label: str, values: Sequence[str]) -> str:
+    """Render a labelled category (``Agentes``/``Modelos``) with one chip per value."""
+    if not values:
+        return ""
+    tag = f"<span class='kpi-cat'>{html.escape(label)}</span>"
+    items = "".join(
+        f"<span class='kpi'>{html.escape(v)}</span>" for v in values
+    )
+    return tag + items
 
 
 def _artifact_title(artifact: Artifact) -> str:

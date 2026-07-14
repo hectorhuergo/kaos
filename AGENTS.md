@@ -129,6 +129,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0017 — Console: Agent Catalog, Prompt Augmentation & Interactive Run
 - ADR-0018 — Friendly Names, Dashboard Header & Persisted Agent Prompts
 - ADR-0019 — Cross-Workspace Relations (Project Graph)
+- ADR-0020 — Chat over Knowledge, Contributions Reuse & Artifact Threads
 
 ### RFC
 

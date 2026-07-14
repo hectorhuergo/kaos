@@ -107,6 +107,66 @@ def test_api_artifacts_returns_all_versions_of_a_thread() -> None:
     assert "llama3.2:3b" in html_doc and "qwen2.5:3b" in html_doc
 
 
+def test_api_chat_send_persists_turns_and_sessions() -> None:
+    storage = InMemoryStorage()
+    client = TestClient(create_app(Settings(), storage=storage))
+    payload = {
+        "workspace": WS,
+        "user_id": "ana",
+        "agent_id": "resume-agent",
+        "message": "Hola, necesitamos un resumen ejecutivo.",
+        "project": "proyecto-x",
+        "kind": "support",
+    }
+
+    resp = client.post("/api/chat/send", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session"]["workspace"] == WS
+    assert data["session"]["user_id"] == "ana"
+    assert data["session"]["agent_id"] == "resume-agent"
+    assert data["response"]
+
+    sessions = client.get("/api/chat/sessions", params={"workspace": WS}).json()["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["project"] == "proyecto-x"
+    assert sessions[0]["message_count"] == 1
+    assert sessions[0]["agent_id"] == "resume-agent"
+
+
+def test_api_chat_thread_and_aggregated_sessions() -> None:
+    from kaos.domain.subscription import Subscription
+    from kaos.runtime import InMemorySubscriptionStore
+
+    storage = InMemoryStorage()
+    subs = InMemorySubscriptionStore()
+    asyncio.run(
+        subs.add(Subscription(workspace=WS, kind="forum", channel_id="demo"))
+    )
+    client = TestClient(
+        create_app(Settings(), storage=storage, subscription_store=subs)
+    )
+    payload = {
+        "workspace": WS,
+        "user_id": "ana",
+        "agent_id": "resume-agent",
+        "message": "primera pregunta",
+    }
+    session_id = client.post("/api/chat/send", json=payload).json()["session"]["session_id"]
+
+    # The thread returns the ordered user/assistant turns for the session.
+    thread = client.get(
+        "/api/chat/thread", params={"workspace": WS, "session_id": session_id}
+    ).json()
+    roles = [m["role"] for m in thread["messages"]]
+    assert roles == ["user", "assistant"]
+    assert thread["messages"][0]["text"] == "primera pregunta"
+
+    # Without a workspace the sessions endpoint aggregates across workspaces.
+    agg = client.get("/api/chat/sessions").json()["sessions"]
+    assert any(s["session_id"] == session_id and s["workspace"] == WS for s in agg)
+
+
 def test_api_knowledge_relates_same_project_workspaces() -> None:
     """Workspaces of one project are connected; an unrelated repo stays apart."""
     from kaos.domain.subscription import GITHUB, Subscription

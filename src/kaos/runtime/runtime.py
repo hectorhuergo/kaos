@@ -11,6 +11,8 @@ events (evidence) and the artifacts (knowledge).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from kaos.contracts.agent import Agent
 from kaos.contracts.connector import Connector
 from kaos.contracts.context import Context
@@ -49,6 +51,16 @@ class KaosRuntime:
     def register_publisher(self, publisher: Publisher) -> None:
         """Register a publisher to expose knowledge."""
         self._publishers.append(publisher)
+
+    def prime_workspace(self, workspace: str, events: Sequence[Event]) -> None:
+        """Seed a workspace's history with prior events before the run.
+
+        Contexts are built from the accumulated per-workspace history, so seeding
+        it (e.g. with stored human contributions from the chat) lets agents weigh
+        knowledge that predates this run. Safe to call before :meth:`start`.
+        """
+        if events:
+            self._history.setdefault(workspace, []).extend(events)
 
     async def start(self) -> None:
         """Subscribe the dispatcher and start every connector."""

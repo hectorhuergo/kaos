@@ -17,6 +17,7 @@ from kaos.core.knowledge import (
     relate_workspaces,
 )
 from kaos.plugins.dashboard import render_dashboard
+from kaos.plugins.dashboard.metrics import summarize_workspace
 from kaos.runtime import InMemoryStorage
 
 WS = "discord:42"
@@ -112,11 +113,22 @@ def test_render_dashboard_embeds_summaries_and_graph() -> None:
     assert "class=\"mermaid\"" in html_doc
     assert "PMO" in html_doc
     assert "gpt-4o" in html_doc
+    assert "assets" in html_doc.lower()
     assert "Estado" in html_doc
     # Mermaid must load as a classic UMD script (global), not as an ES module:
     # importing the UMD build as a module fails silently and shows raw text.
     assert "<script src=" in html_doc
     assert "type=\"module\"" not in html_doc
+
+
+def test_workspace_metrics_capture_assets_agents_and_models() -> None:
+    storage = _seed()
+    artifacts = asyncio.run(storage.list_artifacts(WS))
+    metrics = summarize_workspace(artifacts)
+    assert metrics["asset_count"] == 2
+    assert metrics["artifact_count"] == 2
+    assert metrics["agents"] == ["resume-agent"]
+    assert metrics["models"] == ["gpt-4o"]
 
 
 def test_empty_workspaces_produce_empty_graph() -> None:

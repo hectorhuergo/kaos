@@ -117,11 +117,34 @@ class ResumeAgent:
                     "summary": summary,
                     "format": "markdown",
                     "message_count": len(messages),
+                    "messages": self._transcript(messages),
                 },
                 source_events=tuple(event.id for event in messages),
                 metadata=self._origin_metadata(messages),
             )
         ]
+
+    @staticmethod
+    def _transcript(events: Sequence[Event]) -> list[dict[str, str]]:
+        """Embed the originating messages so the thread travels with the summary.
+
+        Keeping the transcript inside the artifact makes the knowledge
+        self-contained: any surface (e.g. the chat history) can show the full
+        thread that produced a summary without depending on the raw events still
+        living in storage — which the forum path never persists. Text is redacted
+        so a published artifact never leaks a secret (the raw event remains the
+        immutable evidence elsewhere).
+        """
+        out: list[dict[str, str]] = []
+        for event in events:
+            out.append(
+                {
+                    "author": str(event.payload.get("author", "unknown")),
+                    "text": redact_secrets(str(event.payload.get("text", ""))),
+                    "timestamp": str(event.payload.get("timestamp") or ""),
+                }
+            )
+        return out
 
     @staticmethod
     def _origin_metadata(events: Sequence[Event]) -> dict[str, str]:
