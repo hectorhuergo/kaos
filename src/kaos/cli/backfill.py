@@ -42,6 +42,9 @@ async def run_backfill(
     settings: Settings | None = None,
     publisher: Publisher | None = None,
     extra_instructions: str = "",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    agent_id: str | None = None,
 ) -> int:
     """Read a channel's history, summarize it, and publish (or print) the result.
 
@@ -49,8 +52,12 @@ async def run_backfill(
     a capturing publisher for a web-console dry-run preview), so nothing is sent
     to Discord regardless of the environment. ``extra_instructions`` augment the
     Resume Agent's prompt (focus/tone) without changing its required structure.
+
+    ``llm_provider``/``llm_model`` are an optional per-run override (from a
+    subscription or a console run) that wins over the global default.
+    ``agent_id`` attributes the produced summary to the selected agent.
     """
-    settings = await load_settings(settings)
+    settings = await load_settings(settings, provider=llm_provider, model=llm_model)
     if not settings.discord_token:
         print("error: KAOS_DISCORD_TOKEN is not set (needed to read Discord)")
         return 1
@@ -70,7 +77,9 @@ async def run_backfill(
     storage = InMemoryStorage() if dry_run else build_storage(settings)
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(DiscordConnector(source, emit_completed=True))
-    runtime.register_agent(ResumeAgent(llm, extra_instructions=extra_instructions))
+    runtime.register_agent(
+        ResumeAgent(llm, extra_instructions=extra_instructions, agent_id=agent_id)
+    )
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     )
@@ -107,6 +116,9 @@ async def run_forum_backfill(
     settings: Settings | None = None,
     publisher: Publisher | None = None,
     extra_instructions: str = "",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    agent_id: str | None = None,
 ) -> int:
     """Summarize every thread of a Discord forum channel.
 
@@ -127,8 +139,11 @@ async def run_forum_backfill(
     When ``publisher`` is provided it is used instead of the configured one (e.g.
     a capturing publisher for a web-console dry-run preview), so nothing is sent
     to Discord regardless of the environment.
+
+    ``llm_provider``/``llm_model`` are an optional per-run override (from a
+    subscription or a console run) that wins over the global default.
     """
-    settings = await load_settings(settings)
+    settings = await load_settings(settings, provider=llm_provider, model=llm_model)
     if not settings.discord_token:
         print("error: KAOS_DISCORD_TOKEN is not set (needed to read Discord)")
         return 1
@@ -142,7 +157,7 @@ async def run_forum_backfill(
         print(f"error: {exc}")
         return 1
 
-    agent = ResumeAgent(llm, extra_instructions=extra_instructions)
+    agent = ResumeAgent(llm, extra_instructions=extra_instructions, agent_id=agent_id)
     publisher = publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     storage = build_storage(settings)
     cache = SummaryCache(storage)
@@ -291,7 +306,7 @@ async def run_forum_backfill(
                     print("\nSin cambios en ningún hilo — no se publica (idempotente).")
                 else:
                     report = _build_consolidated_report(
-                        forum_channel_id, workspace, summaries
+                        forum_channel_id, workspace, summaries, agent_id=agent_id
                     )
                     await publisher.publish(report)
     finally:
@@ -307,6 +322,8 @@ def _build_consolidated_report(
     forum_channel_id: str,
     workspace: str,
     summaries: list[tuple[str, str, Artifact]],
+    *,
+    agent_id: str | None = None,
 ) -> Artifact:
     """Merge per-thread summaries into a single "Estado del Proyecto" report.
 
@@ -326,6 +343,9 @@ def _build_consolidated_report(
         all_source_events.extend(base.source_events)
         total_messages += int(base.content.get("message_count", 0))
 
+    metadata: dict[str, str] = {"forum_channel_id": forum_channel_id}
+    if agent_id and agent_id.strip():
+        metadata["agent_id"] = agent_id.strip()
     return Artifact(
         kind="project.status",
         workspace=workspace,
@@ -337,7 +357,7 @@ def _build_consolidated_report(
             "thread_count": len(summaries),
         },
         source_events=tuple(all_source_events),
-        metadata={"forum_channel_id": forum_channel_id},
+        metadata=metadata,
     )
 
 

@@ -130,6 +130,9 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0018 — Friendly Names, Dashboard Header & Persisted Agent Prompts
 - ADR-0019 — Cross-Workspace Relations (Project Graph)
 - ADR-0020 — Chat over Knowledge, Contributions Reuse & Artifact Threads
+- ADR-0021 — GitHub Copilot Provider (device-flow OAuth)
+- ADR-0022 — Per-run Provider & Model Selection
+- ADR-0023 — Per-subscription Agent Selection
 
 ### RFC
 

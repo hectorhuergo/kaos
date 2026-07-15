@@ -7,6 +7,8 @@ and the plugins decoupled from each other.
 
 from __future__ import annotations
 
+import contextlib
+
 from kaos.contracts.config_store import ConfigStore
 from kaos.contracts.credential_store import CredentialStore
 from kaos.contracts.llm import LLMProvider
@@ -27,6 +29,7 @@ from kaos.plugins.providers import (
     DEFAULT_OLLAMA_MODEL,
     OLLAMA_BASE_URL,
     OPENAI_BASE_URL,
+    CopilotLLMProvider,
     OpenAICompatibleLLMProvider,
 )
 from kaos.plugins.publishers import (
@@ -101,7 +104,12 @@ async def _close(obj: object) -> None:
         await close()
 
 
-async def load_settings(base: Settings | None = None) -> Settings:
+async def load_settings(
+    base: Settings | None = None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> Settings:
     """Return ``base`` (or env settings) overlaid with the persisted config.
 
     Two kinds of durable, non-environment state are overlaid so a change made in
@@ -113,13 +121,27 @@ async def load_settings(base: Settings | None = None) -> Settings:
        overrides) from the :class:`CredentialStore`.
 
     The environment is the **fallback**: when nothing is persisted the value from
-    ``base`` (i.e. ``.env``) is kept. Without a ``database_url`` this is a no-op.
+    ``base`` (i.e. ``.env``) is kept.
+
+    An explicit per-run ``provider``/``model`` override (e.g. chosen for a single
+    subscription, chat message or dashboard run) wins over the persisted config
+    and drives which provider's credential is resolved. A ``None`` override means
+    "use the persisted/global selection". Without a ``database_url`` only the
+    override is applied (no persisted state to overlay).
     """
     base = base if base is not None else Settings.from_env()
-    if not base.database_url:
-        return base
+    override_provider = provider or None
+    override_model = model or None
 
-    updates: dict[str, object] = {}
+    if not base.database_url:
+        updates: dict[str, object] = {}
+        if override_provider:
+            updates["llm_provider"] = override_provider
+        if override_model:
+            updates["llm_model"] = override_model
+        return base.model_copy(update=updates) if updates else base
+
+    updates = {}
 
     config_store = build_config_store(base)
     try:
@@ -130,19 +152,31 @@ async def load_settings(base: Settings | None = None) -> Settings:
         updates["llm_provider"] = config.llm_provider
         updates["llm_model"] = config.llm_model
 
+    # An explicit per-run override wins over the persisted selection.
+    if override_provider:
+        updates["llm_provider"] = override_provider
+        # A model persisted for another provider must not leak across providers:
+        # drop it unless the caller also supplied a model.
+        if not override_model and config is not None and config.llm_provider != override_provider:
+            updates.pop("llm_model", None)
+    if override_model:
+        updates["llm_model"] = override_model
+
     # Resolve the credential for whichever provider is now active.
-    provider = str(updates.get("llm_provider", base.llm_provider))
+    provider_id = str(updates.get("llm_provider", base.llm_provider))
     credential_store = build_credential_store(base)
     try:
-        credential = await credential_store.get(provider)
+        credential = await credential_store.get(provider_id)
     finally:
         await _close(credential_store)
     if credential is not None:
-        if credential.model:
+        # The explicit config selection (llm_model) takes precedence over a
+        # credential's stored model — a model chosen in the console must win.
+        if credential.model and "llm_model" not in updates:
             updates["llm_model"] = credential.model
         if credential.base_url:
             updates["llm_base_url"] = credential.base_url
-        field = secret_field(provider)
+        field = secret_field(provider_id)
         if field and credential.api_key:
             updates[field] = credential.api_key
 
@@ -161,6 +195,18 @@ def build_llm(settings: Settings) -> LLMProvider:
             )
         return OpenAICompatibleLLMProvider.github_models(
             token=token, model=settings.llm_model, timeout=settings.llm_timeout
+        )
+    if settings.llm_provider == "copilot":
+        token = settings.copilot_oauth_token
+        if not token:
+            raise ValueError(
+                "KAOS_COPILOT_TOKEN is required for the 'copilot' provider. "
+                "Run `kaos copilot login` to obtain it."
+            )
+        # The app-wide default (gpt-4o-mini) is itself a valid Copilot model, so
+        # the configured model is honoured as-is.
+        return CopilotLLMProvider(
+            oauth_token=token, model=settings.llm_model, timeout=settings.llm_timeout
         )
     if settings.llm_provider == "anthropic":
         key = settings.anthropic_api_key
@@ -198,6 +244,37 @@ def build_llm(settings: Settings) -> LLMProvider:
             timeout=settings.llm_timeout,
         )
     return EchoLLMProvider(response=SAMPLE_SUMMARY)
+
+
+async def list_models(base: Settings, provider_id: str) -> list[str]:
+    """Best-effort list of model ids ``provider_id`` exposes (``[]`` on failure).
+
+    Resolves ``provider_id``'s persisted credential (regardless of the currently
+    active provider), builds the matching provider and asks its ``/models``
+    endpoint. Any failure — no credential, unreachable server, unsupported
+    listing — degrades to an empty list, so the console falls back to a free-text
+    model field. ``echo`` has no catalog and returns ``[]``.
+    """
+    if provider_id in ("echo", ""):
+        return []
+    try:
+        resolved = await load_settings(base, provider=provider_id)
+        settings = resolved.model_copy(update={"llm_provider": provider_id})
+        provider = build_llm(settings)
+    except Exception:  # noqa: BLE001 - best-effort discovery
+        return []
+    lister = getattr(provider, "list_models", None)
+    if lister is None:
+        return []
+    try:
+        return [str(m) for m in await lister()]
+    except Exception:  # noqa: BLE001 - best-effort discovery
+        return []
+    finally:
+        aclose = getattr(provider, "aclose", None)
+        if aclose is not None:
+            with contextlib.suppress(Exception):
+                await aclose()
 
 
 def build_runtime(settings: Settings) -> KaosRuntime:

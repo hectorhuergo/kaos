@@ -55,6 +55,15 @@ CATALOG: tuple[ProviderInfo, ...] = (
         notes="Modelos vía GitHub Models (token con permiso 'Models').",
     ),
     ProviderInfo(
+        id="copilot",
+        label="GitHub Copilot",
+        default_model="gpt-4o",
+        base_url="https://api.githubcopilot.com",
+        secret_env=("KAOS_COPILOT_TOKEN",),
+        notes="API de GitHub Copilot (requiere suscripción). Autenticá con "
+        "`kaos copilot login` (device flow); el token se intercambia por uno efímero.",
+    ),
+    ProviderInfo(
         id="anthropic",
         label="Anthropic (Claude)",
         default_model="claude-3-5-haiku-latest",
@@ -83,12 +92,14 @@ assert {p.id for p in CATALOG} == set(LLM_PROVIDERS), (
 _SECRET_FIELD: dict[str, str] = {
     "openai": "llm_api_key",
     "github": "github_token",
+    "copilot": "copilot_oauth_token",
     "anthropic": "anthropic_api_key",
 }
 
 _SECRET_ENV: dict[str, tuple[str, ...]] = {
     "openai": ("KAOS_LLM_API_KEY",),
     "github": ("KAOS_GITHUB_TOKEN", "GITHUB_TOKEN"),
+    "copilot": ("KAOS_COPILOT_TOKEN",),
     "anthropic": ("KAOS_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
 }
 
@@ -129,6 +140,8 @@ def is_ready(provider_id: str, settings: Settings) -> bool:
         return True
     if provider_id == "github":
         return bool(settings.github_token)
+    if provider_id == "copilot":
+        return bool(settings.copilot_oauth_token)
     if provider_id == "anthropic":
         return bool(settings.anthropic_api_key)
     if provider_id == "openai":

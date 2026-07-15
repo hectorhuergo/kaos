@@ -63,6 +63,23 @@ def test_run_produces_traceable_summary() -> None:
     assert artifact.source_events == (e1.id, e2.id)
 
 
+def test_run_stamps_selected_agent_in_metadata() -> None:
+    # Default: no agent_id in metadata (produced_by carries the identity).
+    plain = asyncio.run(
+        ResumeAgent(EchoLLMProvider()).run(
+            Context(workspace="w1", events=(_message("ana", "hola"), _completed()))
+        )
+    )
+    assert "agent_id" not in plain[0].metadata
+    # A selected agent is stamped so surfaces attribute the knowledge to it.
+    tagged = asyncio.run(
+        ResumeAgent(EchoLLMProvider(), agent_id="dev-agent").run(
+            Context(workspace="w1", events=(_message("ana", "hola"), _completed()))
+        )
+    )
+    assert tagged[0].metadata["agent_id"] == "dev-agent"
+
+
 def test_run_builds_transcript_prompt() -> None:
     llm = EchoLLMProvider()  # echoes the last (user) message = the transcript
     agent = ResumeAgent(llm)

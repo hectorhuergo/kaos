@@ -107,6 +107,15 @@ def main() -> int:
 
     sub.add_parser("providers", help="list LLM providers and their readiness")
 
+    cp_p = sub.add_parser("copilot", help="authenticate with GitHub Copilot")
+    cp_p.add_argument(
+        "action",
+        nargs="?",
+        choices=("login", "status"),
+        default="login",
+        help="login (device flow, default) or status",
+    )
+
     kn_p = sub.add_parser("knowledge", help="inspect the accumulated knowledge graph")
     kn_p.add_argument(
         "--workspace", default=None, help="workspace or Discord id (default: subscriptions)"
@@ -260,6 +269,14 @@ def main() -> int:
         from kaos.cli.providers import list_providers
 
         return list_providers()
+    elif a.cmd == "copilot":
+        import asyncio
+
+        from kaos.cli.copilot import run_copilot_login, run_copilot_status
+
+        if a.action == "status":
+            return asyncio.run(run_copilot_status())
+        return asyncio.run(run_copilot_login())
     elif a.cmd == "knowledge":
         import asyncio
 

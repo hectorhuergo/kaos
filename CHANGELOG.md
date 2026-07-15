@@ -1,6 +1,60 @@
 # Changelog
 
 ## Unreleased
+- Per-subscription agent selection: choose which agent processes a subscription in
+  **Ejecutar** (per-run override) and **Suscripciones** (persistent, so the scheduler
+  and `kaos run` honor it), plus **Vista previa**. `Subscription` gains a nullable
+  `agent_id` (Postgres `ADD COLUMN IF NOT EXISTS`; `None` → the default `resume-agent`).
+  Threaded through `run_backfill`, `run_forum_backfill`, `run_github`,
+  `preview_subscription` and `run_subscription` (the latter two defaulting to the
+  subscription's stored agent; an explicit `agent_id` wins per run). The selected
+  agent drives which persisted extra-instructions augment the summary and is stamped
+  on the artifact's `metadata["agent_id"]` (which dashboards/metrics already consume)
+  without changing `produced_by` or the summary structure — a forward-compatible base
+  for future multi-agent orchestration. API bodies accept optional `agent_id`; console
+  adds a reusable agent selector in Subscriptions, Vista previa and the Ejecutar modal,
+  and a 🧠 pill on subscription cards. ADR-0023.
+- Console UX: removed the redundant top header bar and the Chat section's
+  heading/description to free vertical space. Subscriptions `PATCH`/`DELETE` routes now
+  use a `:path` converter so GitHub `owner/repo` ids (encoded `%2F`) route correctly
+  (was 404). The Dashboards "Ejecutar" publish lookup uses `getElementById` so a `/` in
+  a GitHub channel id no longer breaks the CSS selector. Providers "Modelo" field is now
+  the reusable model selector (turns into a `<select>` when the provider lists models).
+- Per-run provider & model selection: choose the LLM `provider` + `model` per run
+  wherever KAOS produces knowledge. `load_settings(base, *, provider=, model=)`
+  takes an explicit override that wins over the persisted config and drives which
+  provider's credential is resolved (a provider switch without a model drops the
+  other provider's persisted model so it can't leak); threaded through
+  `run_backfill`, `run_forum_backfill`, `run_github`, `send_message`,
+  `preview_subscription` and `run_subscription`. `Subscription` gains persistent
+  `llm_provider`/`llm_model` (nullable; Postgres `ADD COLUMN IF NOT EXISTS`) so the
+  scheduler and `kaos run` honor it too. New best-effort model listing
+  (`OpenAICompatibleLLMProvider.list_models`, `factory.list_models`, `GET
+  /api/providers/{id}/models`) — `[]` on any failure. Run/preview/chat/subscription
+  API bodies accept optional `llm_provider`/`llm_model`. Console: a reusable
+  provider+model selector (`<select>` when models can be listed, free-text input
+  otherwise) in Subscriptions, Chat "Más opciones" and Vista previa, plus a new
+  editable Dashboards **confirm modal** (provider/model + Publicar) replacing the
+  `confirm()`. ADR-0022.
+- GitHub Copilot provider (`copilot`): a new `LLMProvider` backed by the GitHub
+  Copilot API (`https://api.githubcopilot.com`), distinct from GitHub Models.
+  Auth is a two-step chain: a long-lived GitHub OAuth token (`gho_…`) obtained via
+  the **device flow** (`kaos copilot login` — autologin, no manual PAT) is
+  exchanged at request time for a short-lived Copilot session token
+  (`copilot_internal/v2/token`), cached until shortly before it expires and sent
+  with the editor headers Copilot requires. `CopilotLLMProvider` extends
+  `OpenAICompatibleLLMProvider` via two additive hooks (`extra_headers` and an
+  async `_auth_token()`), reusing the request + rate-limit retry logic. New
+  `KAOS_COPILOT_TOKEN` setting, catalog entry, `build_llm` branch, and
+  `kaos copilot login|status` CLI. Persists the token in the credential store
+  (or prints it for `.env`). Console: item reorder — nav is now Dashboards,
+  Subscriptions, Vista previa, Chat · Configuración (Agentes, Providers), landing
+  on Dashboards; chat history interleaves each summary run chronologically
+  instead of collapsing versions into one row; Dashboards drops the costly
+  "Previsualizar" for a per-row **Publicar** checkbox (reflecting the
+  subscription's default) and a `confirm()` before Ejecutar. Fixed: an explicit
+  model chosen in the console now wins over a credential's stored model
+  (`load_settings`). ADR-0021.
 - Chat over knowledge & artifact threads: the console chat is no longer a silo —
   it enriches and reuses the same knowledge (artifacts + events). `POST
   /api/chat/send` accepts `about_artifact` to anchor a chat on **any** stored

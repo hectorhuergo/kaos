@@ -29,6 +29,9 @@ async def run_github(
     settings: Settings | None = None,
     publisher: Publisher | None = None,
     extra_instructions: str = "",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    agent_id: str | None = None,
 ) -> int:
     """Summarize a repository's recent activity and publish (or print) it.
 
@@ -36,8 +39,11 @@ async def run_github(
     (e.g. a capturing publisher for a web-console dry-run preview), so nothing is
     sent to Discord regardless of the environment. ``extra_instructions`` augment
     the Resume Agent's prompt (focus/tone) without changing its structure.
+
+    ``llm_provider``/``llm_model`` are an optional per-run override (from a
+    subscription or a console run) that wins over the global default.
     """
-    settings = await load_settings(settings)
+    settings = await load_settings(settings, provider=llm_provider, model=llm_model)
     target = repo or settings.github_repo
     if not target:
         print("error: falta el repositorio (argumento <owner/repo> o KAOS_GITHUB_REPO)")
@@ -57,7 +63,9 @@ async def run_github(
     storage = InMemoryStorage() if dry_run else build_storage(settings)
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(GitHubConnector(source, repo=target, emit_completed=True))
-    runtime.register_agent(ResumeAgent(llm, extra_instructions=extra_instructions))
+    runtime.register_agent(
+        ResumeAgent(llm, extra_instructions=extra_instructions, agent_id=agent_id)
+    )
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     )

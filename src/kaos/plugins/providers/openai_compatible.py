@@ -43,6 +43,7 @@ class OpenAICompatibleLLMProvider:
         client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
         max_retries: int = 5,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
@@ -52,6 +53,7 @@ class OpenAICompatibleLLMProvider:
         self._max_retries = max_retries
         self._client = client
         self._owns_client = client is None
+        self._extra_headers = extra_headers or {}
 
     @classmethod
     def github_models(
@@ -135,6 +137,14 @@ class OpenAICompatibleLLMProvider:
             self._client = httpx.AsyncClient(timeout=self._timeout)
         return self._client
 
+    async def _auth_token(self) -> str:
+        """Return the Bearer token for the request.
+
+        A hook so providers with short-lived tokens (e.g. GitHub Copilot) can
+        mint/refresh one per call while reusing the request + retry logic.
+        """
+        return self._api_key
+
     async def complete(self, messages: Sequence[Message], **options: object) -> str:
         """Return the model completion, retrying on 429 rate limits."""
         payload = {
@@ -144,7 +154,8 @@ class OpenAICompatibleLLMProvider:
         }
         client = self._get_client()
         url = f"{self._base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        token = await self._auth_token()
+        headers = {"Authorization": f"Bearer {token}", **self._extra_headers}
         for attempt in range(self._max_retries + 1):
             response = await client.post(url, json=payload, headers=headers)
             if response.status_code == _RATE_LIMITED and attempt < self._max_retries:
@@ -155,6 +166,31 @@ class OpenAICompatibleLLMProvider:
             return str(data["choices"][0]["message"]["content"])
         response.raise_for_status()  # pragma: no cover - safety net
         return ""
+
+    async def list_models(self) -> list[str]:
+        """Return the model ids the endpoint advertises via ``GET /models``.
+
+        Best-effort discovery for the console's model selector. Parses the
+        OpenAI-style ``{"data": [{"id": ...}]}`` shape and a couple of common
+        fallbacks. Raises on transport/HTTP errors so the caller can decide to
+        fall back to a free-text field.
+        """
+        client = self._get_client()
+        url = f"{self._base_url}/models"
+        token = await self._auth_token()
+        headers = {"Authorization": f"Bearer {token}", **self._extra_headers}
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        rows = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            return []
+        models: list[str] = []
+        for row in rows:
+            ident = row.get("id") or row.get("name") if isinstance(row, dict) else row
+            if ident:
+                models.append(str(ident))
+        return sorted(dict.fromkeys(models))
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float:

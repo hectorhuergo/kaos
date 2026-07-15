@@ -57,6 +57,17 @@ class Subscription(BaseModel):
     # seconds. ``None`` means "every scheduler pass" (the global cadence). The
     # plan lives with the thing being watched — there is no separate plan store.
     interval_seconds: int | None = None
+    # Per-subscription LLM override. When set, the scheduler, ``kaos run`` and the
+    # console use this provider/model instead of the global default (empty means
+    # "use the global default"). Persisted so every run path honors the choice.
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    # Which agent processes this subscription. ``None`` means the default
+    # summarizer (``resume-agent``). The selected agent's persisted extra
+    # instructions augment the summary and it is stamped on the produced
+    # artifact's ``metadata["agent_id"]`` for traceability. A single agent for
+    # now; kept nullable/forward-compatible for future multi-agent orchestration.
+    agent_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     @staticmethod

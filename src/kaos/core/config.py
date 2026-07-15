@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 
-LLM_PROVIDERS = ("echo", "openai", "github", "anthropic", "ollama")
+LLM_PROVIDERS = ("echo", "openai", "github", "copilot", "anthropic", "ollama")
 
 
 def load_dotenv(path: str | Path = ".env", *, override: bool = False) -> None:
@@ -53,6 +53,9 @@ class Settings(BaseModel):
     llm_timeout: float = 120.0
     github_token: str | None = None
     anthropic_api_key: str | None = None
+    # GitHub Copilot OAuth token (gho_…) obtained via `kaos copilot login`.
+    # At runtime it is exchanged for a short-lived Copilot session token.
+    copilot_oauth_token: str | None = None
 
     # GitHub connector (summarize a repository's recent activity)
     github_repo: str | None = None
@@ -126,6 +129,7 @@ class Settings(BaseModel):
             llm_timeout=llm_timeout,
             github_token=get("KAOS_GITHUB_TOKEN") or get("GITHUB_TOKEN"),
             anthropic_api_key=get("KAOS_ANTHROPIC_API_KEY") or get("ANTHROPIC_API_KEY"),
+            copilot_oauth_token=get("KAOS_COPILOT_TOKEN") or get("GITHUB_COPILOT_TOKEN"),
             github_repo=get("KAOS_GITHUB_REPO"),
             discord_token=get("KAOS_DISCORD_TOKEN"),
             discord_guild_id=get("KAOS_DISCORD_GUILD_ID"),

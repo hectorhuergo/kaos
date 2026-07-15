@@ -28,6 +28,19 @@ def test_anthropic_ready_with_key() -> None:
     assert is_ready("anthropic", Settings(llm_api_key="k")) is False
 
 
+def test_copilot_ready_with_oauth_token() -> None:
+    from kaos.core.providers import secret_field
+
+    assert is_ready("copilot", Settings()) is False
+    assert is_ready("copilot", Settings(copilot_oauth_token="gho_x")) is True
+    # No cross-provider fallback: a GitHub Models token does not enable Copilot.
+    assert is_ready("copilot", Settings(github_token="ghp_x")) is False
+    assert secret_field("copilot") == "copilot_oauth_token"
+    assert secret_sources("copilot", Settings(copilot_oauth_token="gho_x")) == (
+        "KAOS_COPILOT_TOKEN",
+    )
+
+
 def test_secret_sources_report_only_the_providers_own_env() -> None:
     # Without its own secret set there is no source (no generic fallback).
     assert secret_sources("anthropic", Settings(llm_api_key="k")) == ()
@@ -61,4 +74,41 @@ def test_provider_status_marks_active_and_readiness() -> None:
     assert status["github"] == (True, True)
     assert status["openai"][1] is False  # not active
     assert status["echo"][0] is True  # always ready
+
+
+def test_list_models_parses_openai_shape() -> None:
+    import asyncio
+
+    import httpx
+
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(
+            200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(model="x", api_key="sk", client=client)
+
+    async def scenario() -> list[str]:
+        try:
+            return await provider.list_models()
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(scenario()) == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_list_models_helper_returns_empty_on_failure() -> None:
+    import asyncio
+
+    from kaos.bootstrap.factory import list_models
+
+    # No credential + no DB: build_llm raises for openai -> best-effort [].
+    assert asyncio.run(list_models(Settings(), "openai")) == []
+    # echo has no catalog.
+    assert asyncio.run(list_models(Settings(), "echo")) == []
+
 

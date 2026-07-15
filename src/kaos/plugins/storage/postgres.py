@@ -66,6 +66,9 @@ ALTER TABLE kaos_subscriptions
     ADD COLUMN IF NOT EXISTS publish_default boolean NOT NULL DEFAULT true;
 ALTER TABLE kaos_subscriptions
     ADD COLUMN IF NOT EXISTS related_to text[] NOT NULL DEFAULT '{}';
+ALTER TABLE kaos_subscriptions ADD COLUMN IF NOT EXISTS llm_provider text;
+ALTER TABLE kaos_subscriptions ADD COLUMN IF NOT EXISTS llm_model text;
+ALTER TABLE kaos_subscriptions ADD COLUMN IF NOT EXISTS agent_id text;
 """
 
 _RUNTIME_CONFIG_SCHEMA = """
@@ -223,8 +226,8 @@ class PostgresSubscriptionStore:
             INSERT INTO kaos_subscriptions
                 (id, workspace, kind, channel_id, guild_id, resume_thread_id,
                  active, interval_seconds, project, publish_default, related_to,
-                 created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 llm_provider, llm_model, agent_id, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (channel_id) DO UPDATE SET
                 workspace = EXCLUDED.workspace,
                 kind = EXCLUDED.kind,
@@ -234,7 +237,10 @@ class PostgresSubscriptionStore:
                 interval_seconds = EXCLUDED.interval_seconds,
                 project = EXCLUDED.project,
                 publish_default = EXCLUDED.publish_default,
-                related_to = EXCLUDED.related_to
+                related_to = EXCLUDED.related_to,
+                llm_provider = EXCLUDED.llm_provider,
+                llm_model = EXCLUDED.llm_model,
+                agent_id = EXCLUDED.agent_id
             """,
             subscription.id,
             subscription.workspace,
@@ -247,6 +253,9 @@ class PostgresSubscriptionStore:
             subscription.project,
             subscription.publish_default,
             list(subscription.related_to),
+            subscription.llm_provider,
+            subscription.llm_model,
+            subscription.agent_id,
             subscription.created_at,
         )
 
@@ -294,6 +303,9 @@ class PostgresSubscriptionStore:
             project=row["project"],
             publish_default=row["publish_default"],
             related_to=list(row["related_to"] or []),
+            llm_provider=row["llm_provider"],
+            llm_model=row["llm_model"],
+            agent_id=row["agent_id"],
             created_at=row["created_at"],
         )
 

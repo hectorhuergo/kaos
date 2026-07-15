@@ -42,7 +42,14 @@ def _http_message(exc: httpx.HTTPError) -> str:
 
 
 async def preview_github(
-    settings: Settings, repo: str, *, limit: int = 30, extra_instructions: str = ""
+    settings: Settings,
+    repo: str,
+    *,
+    limit: int = 30,
+    extra_instructions: str = "",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    agent_id: str | None = None,
 ) -> list[Artifact]:
     """Summarize a GitHub repo in dry-run and return the captured artifacts."""
     if not repo.strip():
@@ -56,6 +63,9 @@ async def preview_github(
             settings=settings,
             publisher=capturing,
             extra_instructions=extra_instructions,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            agent_id=agent_id,
         )
     except httpx.HTTPError as exc:
         raise PreviewError(_http_message(exc)) from exc
@@ -70,16 +80,28 @@ async def preview_subscription(
     *,
     subscription_store: SubscriptionStore,
     extra_instructions: str = "",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    agent_id: str | None = None,
 ) -> list[Artifact]:
     """Summarize a subscription (forum consolidated, channel or repo) in dry-run.
 
     Looks up the subscription to know its kind and guild, runs the matching
     pipeline with a capturing publisher and returns the artifacts that *would*
     have been published.
+
+    The LLM override defaults to the subscription's stored ``llm_provider``/
+    ``llm_model``; an explicit ``llm_provider``/``llm_model`` argument (e.g. from
+    the console selectors) wins for this run. ``agent_id`` likewise defaults to
+    the subscription's stored agent.
     """
     subscription = await subscription_store.get(channel_id)
     if subscription is None:
         raise PreviewError(f"no existe una suscripción para {channel_id}")
+
+    provider = llm_provider or subscription.llm_provider
+    model = llm_model or subscription.llm_model
+    agent = agent_id or subscription.agent_id
 
     capturing = CapturingPublisher()
     if subscription.kind == FORUM:
@@ -92,6 +114,9 @@ async def preview_subscription(
                 settings=settings,
                 publisher=capturing,
                 extra_instructions=extra_instructions,
+                llm_provider=provider,
+                llm_model=model,
+                agent_id=agent,
             )
         except httpx.HTTPError as exc:
             raise PreviewError(_http_message(exc)) from exc
@@ -103,6 +128,9 @@ async def preview_subscription(
                 settings=settings,
                 publisher=capturing,
                 extra_instructions=extra_instructions,
+                llm_provider=provider,
+                llm_model=model,
+                agent_id=agent,
             )
         except httpx.HTTPError as exc:
             raise PreviewError(_http_message(exc)) from exc
@@ -114,6 +142,9 @@ async def preview_subscription(
                 settings=settings,
                 publisher=capturing,
                 extra_instructions=extra_instructions,
+                llm_provider=provider,
+                llm_model=model,
+                agent_id=agent,
             )
         except httpx.HTTPError as exc:
             raise PreviewError(_http_message(exc)) from exc

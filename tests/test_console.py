@@ -64,6 +64,42 @@ def test_load_settings_without_db_is_noop() -> None:
     assert got.llm_model == "x"
 
 
+def test_load_settings_override_without_db_is_transient() -> None:
+    base = Settings(llm_provider="echo", llm_model="x")
+    got = asyncio.run(load_settings(base, provider="openai", model="gpt-4o-mini"))
+    assert got.llm_provider == "openai"
+    assert got.llm_model == "gpt-4o-mini"
+    # A None override keeps the base selection.
+    same = asyncio.run(load_settings(base))
+    assert same.llm_provider == "echo"
+
+
+def test_load_settings_override_wins_over_persisted(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import kaos.bootstrap.factory as factory
+
+    config = InMemoryConfigStore()
+    creds = InMemoryCredentialStore()
+
+    async def setup() -> None:
+        await config.set(RuntimeConfig(llm_provider="openai", llm_model="gpt-4o"))
+        await creds.set(
+            ProviderCredential(provider="anthropic", api_key="sk-ant", model="claude-x")
+        )
+
+    asyncio.run(setup())
+    monkeypatch.setattr(factory, "build_config_store", lambda base: config)
+    monkeypatch.setattr(factory, "build_credential_store", lambda base: creds)
+
+    base = Settings(database_url="postgresql://x")
+    got = asyncio.run(load_settings(base, provider="anthropic"))
+    # The explicit override wins over the persisted 'openai' selection...
+    assert got.llm_provider == "anthropic"
+    # ...resolves the overridden provider's credential...
+    assert got.anthropic_api_key == "sk-ant"
+    # ...and the persisted model for 'openai' does not leak; the credential's does.
+    assert got.llm_model == "claude-x"
+
+
 # ---- API tests (require FastAPI's TestClient) ----
 
 pytest.importorskip("fastapi")
@@ -239,6 +275,138 @@ def test_subscription_crud_roundtrip(client: TestClient) -> None:
     assert client.get("/api/subscriptions").json()["subscriptions"] == []
 
 
+def test_subscription_llm_override_roundtrip(client: TestClient) -> None:
+    resp = client.post(
+        "/api/subscriptions",
+        json={
+            "channel_id": "123",
+            "kind": "forum",
+            "llm_provider": "anthropic",
+            "llm_model": "claude-3-5-haiku-latest",
+        },
+    )
+    assert resp.status_code == 201
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["llm_provider"] == "anthropic"
+    assert sub["llm_model"] == "claude-3-5-haiku-latest"
+
+    # A blank override clears it back to null (use the global default).
+    resp = client.patch(
+        "/api/subscriptions/123", json={"llm_provider": "  ", "llm_model": ""}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["llm_provider"] is None
+    assert resp.json()["llm_model"] is None
+
+
+def test_provider_models_endpoint_best_effort(client: TestClient) -> None:
+    # echo has no catalog -> empty list, not an error.
+    resp = client.get("/api/providers/echo/models")
+    assert resp.status_code == 200
+    assert resp.json()["models"] == []
+    # unknown provider -> 404.
+    assert client.get("/api/providers/nope/models").status_code == 404
+
+
+def test_subscription_agent_roundtrip(client: TestClient) -> None:
+    resp = client.post(
+        "/api/subscriptions",
+        json={"channel_id": "123", "kind": "forum", "agent_id": "resume-agent"},
+    )
+    assert resp.status_code == 201
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["agent_id"] == "resume-agent"
+
+    # A blank agent clears it back to null (use the default summarizer).
+    resp = client.patch("/api/subscriptions/123", json={"agent_id": "  "})
+    assert resp.status_code == 200
+    assert resp.json()["agent_id"] is None
+
+
+def test_run_subscription_defaults_to_stored_agent(
+    client: TestClient, monkeypatch  # type: ignore[no-untyped-def]
+) -> None:
+    from kaos.contracts.artifact import Artifact
+
+    client.post(
+        "/api/subscriptions",
+        json={"channel_id": "123", "kind": "forum", "agent_id": "dev-agent"},
+    )
+
+    seen: dict[str, object] = {}
+
+    async def fake_forum(  # type: ignore[no-untyped-def]
+        channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed,
+        settings, publisher, extra_instructions="", llm_provider=None, llm_model=None,
+        agent_id=None,
+    ):
+        seen["agent_id"] = agent_id
+        await publisher.publish(
+            Artifact(
+                kind="project.status",
+                workspace=f"discord:{channel_id}",
+                produced_by="resume-agent",
+                content={"summary": "ok"},
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(
+        "kaos.plugins.dashboard.execute.run_forum_backfill", fake_forum
+    )
+    # No override -> the subscription's stored agent is used.
+    assert client.post("/api/run/subscription", json={"channel_id": "123"}).status_code == 200
+    assert seen["agent_id"] == "dev-agent"
+    # An explicit per-run agent wins over the stored one.
+    client.post(
+        "/api/run/subscription", json={"channel_id": "123", "agent_id": "resume-agent"}
+    )
+    assert seen["agent_id"] == "resume-agent"
+
+
+def test_run_subscription_defaults_to_stored_override(
+    client: TestClient, monkeypatch  # type: ignore[no-untyped-def]
+) -> None:
+    from kaos.contracts.artifact import Artifact
+
+    client.post(
+        "/api/subscriptions",
+        json={
+            "channel_id": "123",
+            "kind": "forum",
+            "llm_provider": "anthropic",
+            "llm_model": "claude-x",
+        },
+    )
+
+    seen: dict[str, object] = {}
+
+    async def fake_forum(  # type: ignore[no-untyped-def]
+        channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed,
+        settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None,
+    ):
+        seen["llm_provider"] = llm_provider
+        seen["llm_model"] = llm_model
+        await publisher.publish(
+            Artifact(
+                kind="project.status",
+                workspace=f"discord:{channel_id}",
+                produced_by="resume-agent",
+                content={"summary": "ok"},
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(
+        "kaos.plugins.dashboard.execute.run_forum_backfill", fake_forum
+    )
+    # No override in the request -> the subscription's stored values are used.
+    resp = client.post("/api/run/subscription", json={"channel_id": "123"})
+    assert resp.status_code == 200
+    assert seen["llm_provider"] == "anthropic"
+    assert seen["llm_model"] == "claude-x"
+
+
 def test_subscription_project_roundtrip(client: TestClient) -> None:
     resp = client.post(
         "/api/subscriptions",
@@ -305,6 +473,17 @@ def test_subscription_patch_missing_is_404(client: TestClient) -> None:
     assert client.patch("/api/subscriptions/nope", json={"project": "x"}).status_code == 404
 
 
+def test_subscription_patch_and_delete_with_slash_id(client: TestClient) -> None:
+    # GitHub subscriptions use an ``owner/repo`` channel_id, so the encoded
+    # ``%2F`` in the path must still route (regression: was 404).
+    client.post("/api/subscriptions", json={"channel_id": "owner/repo", "kind": "github"})
+    resp = client.patch("/api/subscriptions/owner%2Frepo", json={"project": "px"})
+    assert resp.status_code == 200
+    sub = client.get("/api/subscriptions").json()["subscriptions"][0]
+    assert sub["project"] == "px"
+    assert client.delete("/api/subscriptions/owner%2Frepo").status_code == 200
+
+
 def test_subscription_rejects_bad_kind(client: TestClient) -> None:
     resp = client.post("/api/subscriptions", json={"channel_id": "1", "kind": "bogus"})
     assert resp.status_code == 422
@@ -336,7 +515,7 @@ def test_capturing_publisher_collects() -> None:
 def test_preview_github_route_captures(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from kaos.contracts.artifact import Artifact
 
-    async def fake_run_github(repo, *, dry_run, limit, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_run_github(repo, *, dry_run, limit, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         assert dry_run is True  # never publishes for real
         await publisher.publish(
             Artifact(
@@ -364,7 +543,7 @@ def test_preview_github_rejects_empty_repo(client: TestClient) -> None:
 def test_preview_github_network_error_is_422(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import httpx
 
-    async def boom(repo, *, dry_run, limit, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def boom(repo, *, dry_run, limit, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr("kaos.plugins.dashboard.preview.run_github", boom)
@@ -377,7 +556,7 @@ def test_preview_github_network_error_is_422(client: TestClient, monkeypatch) ->
 def test_preview_github_timeout_is_422_retriable(client: TestClient, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     import httpx
 
-    async def slow(repo, *, dry_run, limit, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def slow(repo, *, dry_run, limit, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         raise httpx.ReadTimeout("too slow")
 
     monkeypatch.setattr("kaos.plugins.dashboard.preview.run_github", slow)
@@ -398,7 +577,7 @@ def test_preview_subscription_route_captures(
 
     client.post("/api/subscriptions", json={"channel_id": "123", "kind": "forum"})
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         assert dry_run is True and consolidated is True
         await publisher.publish(
             Artifact(
@@ -483,7 +662,7 @@ def test_preview_subscription_uses_saved_instructions(
     )
     seen: dict[str, object] = {}
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         seen["extra"] = extra_instructions
         await publisher.publish(
             Artifact(
@@ -514,7 +693,7 @@ def test_run_subscription_route_persists(client: TestClient, monkeypatch) -> Non
 
     seen: dict[str, object] = {}
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         # A real run persists (not a dry-run) and captures instead of publishing.
         seen["dry_run"] = dry_run
         seen["force"] = force
@@ -547,7 +726,7 @@ def test_run_all_route_runs_every_subscription(client: TestClient, monkeypatch) 
 
     ran: list[str] = []
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         ran.append(channel_id)
         await publisher.publish(
             Artifact(
@@ -579,7 +758,7 @@ def test_run_subscription_resume_thread_overrides_global(monkeypatch) -> None:  
 
     seen: dict[str, object] = {}
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         seen["thread_id"] = settings.discord_resume_thread_id
         return 0
 
@@ -608,7 +787,7 @@ def test_run_subscription_falls_back_to_global_resume_thread(monkeypatch) -> Non
     store = InMemorySubscriptionStore()
     seen: dict[str, object] = {}
 
-    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions=""):  # type: ignore[no-untyped-def]
+    async def fake_forum(channel_id, *, guild_id, dry_run, consolidated, force, only_if_changed, settings, publisher, extra_instructions="", llm_provider=None, llm_model=None, agent_id=None):  # type: ignore[no-untyped-def]
         seen["thread_id"] = settings.discord_resume_thread_id
         return 0
 

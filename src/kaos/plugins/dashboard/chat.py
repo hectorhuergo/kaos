@@ -155,8 +155,14 @@ async def send_message(
     session_id: str | None = None,
     title: str | None = None,
     about_artifact: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, object]:
-    """Persist a chat turn and generate an assistant response."""
+    """Persist a chat turn and generate an assistant response.
+
+    ``llm_provider``/``llm_model`` are an optional per-message override that wins
+    over the global default (transient — not stored on the session).
+    """
     if not workspace.strip():
         raise ValueError("workspace is required")
     if not user_id.strip():
@@ -166,7 +172,7 @@ async def send_message(
     if not message.strip():
         raise ValueError("message is required")
 
-    resolved = await load_settings(settings)
+    resolved = await load_settings(settings, provider=llm_provider, model=llm_model)
     llm = EchoLLMProvider() if resolved.llm_provider == "echo" else build_llm(resolved)
     session_id = session_id or uuid4().hex
     created_at = utcnow()

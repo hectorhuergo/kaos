@@ -142,6 +142,79 @@ function tab(name){
   if(name==='preview') loadPreview();
 }
 
+// ---- Reusable provider + model selectors (per-run LLM override) ----
+// A pair of controls used in Subscriptions, Chat, Vista previa and the
+// Dashboards run modal: a provider <select> (empty = use the global/subscription
+// default) and a model field that becomes a <select> when the provider can list
+// its models, or a free-text input when it cannot. Empty always means "default".
+let PROVIDER_CATALOG = [];
+const MODELS_CACHE = {};
+async function ensureProviderCatalog(){
+  if(PROVIDER_CATALOG.length) return PROVIDER_CATALOG;
+  try{ const d = await api('/api/providers'); PROVIDER_CATALOG = d.providers || []; }
+  catch(e){ PROVIDER_CATALOG = []; }
+  return PROVIDER_CATALOG;
+}
+function providerOptions(selected){
+  return ['<option value="">(por defecto)</option>'].concat(PROVIDER_CATALOG.map(p =>
+    `<option value="${esc(p.id)}" ${p.id===selected?'selected':''}>${esc(p.label)}</option>`)).join('');
+}
+async function fetchModels(provider){
+  if(!provider) return [];
+  if(MODELS_CACHE[provider]) return MODELS_CACHE[provider];
+  try{ const d = await api('/api/providers/'+encodeURIComponent(provider)+'/models');
+    MODELS_CACHE[provider] = d.models || []; return MODELS_CACHE[provider];
+  }catch(e){ return []; }
+}
+async function renderModelField(container, provider, current){
+  const id = container.dataset.modelId;
+  const models = await fetchModels(provider);
+  if(models.length){
+    const known = current && models.includes(current);
+    const extra = (current && !known)
+      ? `<option value="${esc(current)}" selected>${esc(current)} (actual)</option>` : '';
+    container.innerHTML = `<select id="${id}"><option value="">(por defecto)</option>${extra}`
+      + models.map(m => `<option value="${esc(m)}" ${m===current?'selected':''}>${esc(m)}</option>`).join('')
+      + '</select>';
+  } else {
+    container.innerHTML = `<input id="${id}" placeholder="(por defecto)" value="${esc(current||'')}">`;
+  }
+}
+// Populate a provider select + its model field; re-render the model field when
+// the provider changes. Returns once the initial render is done.
+async function bindProviderModel(provSelId, modelContainerId, provInit, modelInit){
+  await ensureProviderCatalog();
+  const provSel = $('#'+provSelId);
+  const cont = $('#'+modelContainerId);
+  if(!provSel || !cont) return;
+  provSel.innerHTML = providerOptions(provInit||'');
+  await renderModelField(cont, provInit||'', modelInit||'');
+  provSel.onchange = () => renderModelField(cont, provSel.value, '');
+}
+function fieldValue(id){ const el = $('#'+id); return el && el.value.trim() ? el.value.trim() : null; }
+
+// ---- Reusable agent selector ----
+// A provider-style catalog of agents; an empty value means "default" (the
+// resume-agent, or the subscription's stored agent for a per-run override).
+let AGENT_CATALOG = [];
+async function ensureAgentCatalog(){
+  if(AGENT_CATALOG.length) return AGENT_CATALOG;
+  try{ const d = await api('/api/agents'); AGENT_CATALOG = d.agents || [];
+    AGENT_CATALOG.forEach(a => { AGENT_LABELS[a.id] = a.label; }); }
+  catch(e){ AGENT_CATALOG = []; }
+  return AGENT_CATALOG;
+}
+function agentOptions(selected, defaultLabel){
+  return [`<option value="">${esc(defaultLabel)}</option>`].concat(AGENT_CATALOG.map(a =>
+    `<option value="${esc(a.id)}" ${a.id===selected?'selected':''}>${esc(a.label)}</option>`)).join('');
+}
+async function bindAgent(selId, init, defaultLabel){
+  await ensureAgentCatalog();
+  const sel = $('#'+selId);
+  if(!sel) return;
+  sel.innerHTML = agentOptions(init||'', defaultLabel || '(por defecto)');
+}
+
 // ---- Agents ----
 // Extra instructions are kept per-agent (by id) and persisted via the API. The
 // summary pipeline (preview and run) consumes the resume-agent's, augmenting its
@@ -205,7 +278,9 @@ async function loadProviders(){
     const sel = $('#provider-select');
     sel.innerHTML = d.providers.map(p =>
       `<option value="${p.id}" ${p.selected?'selected':''}>${p.label}</option>`).join('');
-    if(!$('#model-input').value) $('#model-input').value = d.selected_model || '';
+    const modelCont = $('#model-input-wrap');
+    await renderModelField(modelCont, sel.value, d.selected_model || '');
+    sel.onchange = () => renderModelField(modelCont, sel.value, '');
     box.innerHTML = d.providers.map(p => `
       <div class="card">
         <div class="row">
@@ -270,11 +345,13 @@ async function loadSubscriptions(){
     const d = await api('/api/subscriptions');
     SUBS = d.subscriptions;
     const newRel = $('#sub-related'); if(newRel) newRel.innerHTML = wsOptions([], null);
+    if(!SUB_EDIT) bindProviderModel('sub-llm-provider', 'sub-llm-model-wrap', '', '');
+    if(!SUB_EDIT) bindAgent('sub-agent', '', '(por defecto)');
     if(!SUBS.length){ box.innerHTML = '<p class="muted">(sin suscripciones activas)</p>'; return; }
     box.innerHTML = SUBS.map((s,i) => `
       <div class="card">
         <div class="row">
-          <div class="grow"><strong>${esc(s.name||s.channel_id)}</strong> <span class="pill">${esc(s.kind)}</span>${s.project?` <span class="pill">📦 ${esc(s.project)}</span>`:''}${s.publish_default?'':' <span class="pill no">solo conocimiento</span>'}${(s.related_to&&s.related_to.length)?` <span class="pill">🔗 ${s.related_to.length}</span>`:''}
+          <div class="grow"><strong>${esc(s.name||s.channel_id)}</strong> <span class="pill">${esc(s.kind)}</span>${s.project?` <span class="pill">📦 ${esc(s.project)}</span>`:''}${s.publish_default?'':' <span class="pill no">solo conocimiento</span>'}${(s.related_to&&s.related_to.length)?` <span class="pill">🔗 ${s.related_to.length}</span>`:''}${s.llm_provider?` <span class="pill">🤖 ${esc(s.llm_provider)}${s.llm_model?(' · '+esc(s.llm_model)):''}</span>`:''}${s.agent_id?` <span class="pill">🧠 ${esc(agentLabel(s.agent_id))}</span>`:''}
             <div class="muted"><code>${esc(s.channel_id)}</code> · workspace: ${esc(s.workspace)} · resume: ${esc(s.resume_thread_id||'-')} · plan: ${s.interval_seconds?('cada '+s.interval_seconds+'s'):'cada pasada'}</div>
           </div>
           <button class="act ghost" onclick="editSub(${i})">Editar</button>
@@ -290,6 +367,8 @@ function subFormReset(){
   $('#sub-publish').checked = true;
   ['sub-channel','sub-kind','sub-guild'].forEach(id => { const el=$('#'+id); if(el) el.disabled=false; });
   const rel = $('#sub-related'); if(rel) rel.innerHTML = wsOptions([], null);
+  bindProviderModel('sub-llm-provider', 'sub-llm-model-wrap', '', '');
+  bindAgent('sub-agent', '', '(por defecto)');
   $('#sub-form-title').textContent = 'Nueva suscripción';
   $('#sub-submit').textContent = 'Suscribir';
   $('#sub-cancel').style.display = 'none';
@@ -307,6 +386,8 @@ function editSub(i){
   $('#sub-project').value = s.project || '';
   $('#sub-publish').checked = !!s.publish_default;
   const rel = $('#sub-related'); if(rel) rel.innerHTML = wsOptions(s.related_to, s.workspace);
+  bindProviderModel('sub-llm-provider', 'sub-llm-model-wrap', s.llm_provider || '', s.llm_model || '');
+  bindAgent('sub-agent', s.agent_id || '', '(por defecto)');
   $('#sub-form-title').textContent = 'Editar suscripción';
   $('#sub-submit').textContent = 'Guardar cambios';
   $('#sub-cancel').style.display = '';
@@ -324,6 +405,9 @@ async function addSub(){
     project: $('#sub-project').value.trim() || null,
     publish_default: $('#sub-publish').checked,
     related_to: selectedValues($('#sub-related')),
+    llm_provider: $('#sub-llm-provider').value || null,
+    llm_model: fieldValue('sub-llm-model'),
+    agent_id: $('#sub-agent') ? ($('#sub-agent').value || null) : null,
   };
   if(!body.channel_id){ toast('Falta channel_id', false); return; }
   try{
@@ -342,6 +426,9 @@ async function saveSubForm(){
     project: $('#sub-project').value.trim() || null,
     publish_default: $('#sub-publish').checked,
     related_to: selectedValues($('#sub-related')),
+    llm_provider: $('#sub-llm-provider').value || null,
+    llm_model: fieldValue('sub-llm-model'),
+    agent_id: $('#sub-agent') ? ($('#sub-agent').value || null) : null,
   };
   try{
     await api('/api/subscriptions/'+encodeURIComponent(SUB_EDIT),
@@ -359,21 +446,25 @@ async function removeSub(id){
 
 // ---- Dashboards ----
 let DASH_WS_CHANNEL = {};
+let DASH_WS_PUBLISH = {};
+let DASH_SUBS = {};
+let RUN_MODAL_CHANNEL = '';
 async function loadDashboards(){
   const box = $('#dashboards'); box.innerHTML = '<p class="muted">Cargando…</p>';
   try{
     const [d, subsData, agentsData] = await Promise.all([
       api('/api/workspaces'), api('/api/subscriptions'), api('/api/agents')]);
     (agentsData.agents || []).forEach(a => { AGENT_LABELS[a.id] = a.label; });
-    DASH_WS_CHANNEL = {};
-    (subsData.subscriptions || []).forEach(s => { if(s.workspace) DASH_WS_CHANNEL[s.workspace] = s.channel_id; });
+    DASH_WS_CHANNEL = {}; DASH_WS_PUBLISH = {}; DASH_SUBS = {};
+    (subsData.subscriptions || []).forEach(s => { if(s.workspace){ DASH_WS_CHANNEL[s.workspace] = s.channel_id; DASH_WS_PUBLISH[s.workspace] = !!s.publish_default; DASH_SUBS[s.channel_id] = s; } });
     if(!d.workspaces.length){ box.innerHTML = '<p class="muted">(sin workspaces — crea una suscripción)</p>'; return; }
     const labels = d.labels || {};
     const summaries = d.summaries || {};
     box.innerHTML = d.workspaces.map(ws => {
       const ch = DASH_WS_CHANNEL[ws];
       const actions = ch
-        ? `<button class="act ghost" onclick="dashPreview('${esc(ch)}')">Previsualizar</button>
+        ? `<label class="row" style="gap:.3rem;color:#8a93a2;font-size:.85rem;margin:0">
+             <input type="checkbox" id="dash-pub-${esc(ch)}" ${DASH_WS_PUBLISH[ws]?'checked':''} style="width:auto;margin:0">Publicar</label>
            <button class="act" onclick="dashRun('${esc(ch)}')">Ejecutar</button>`
         : '';
       return `<div class="card"><div class="row">
@@ -401,20 +492,34 @@ function dashRenderOut(data, note){
       + `<pre class="out">${esc(summary)}</pre>`;
   }).join('');
 }
-async function dashPreview(channelId){
-  const out = $('#dash-out'); out.innerHTML = '<p class="spin">⏳ Previsualizando… (lee la fuente, no publica)</p>';
-  try{
-    const data = await api('/api/preview/subscription', {method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify({channel_id: channelId})});
-    dashRenderOut(data, 'vista previa · no se publicó nada');
-  }catch(e){ out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
-}
 async function dashRun(channelId){
-  const out = $('#dash-out'); out.innerHTML = '<p class="spin">⏳ Ejecutando… (persiste + cache, no publica)</p>';
+  RUN_MODAL_CHANNEL = channelId;
+  const sub = DASH_SUBS[channelId] || {};
+  $('#run-modal-sub').textContent = (sub.name || channelId) + ' · ' + (sub.kind || '');
+  $('#run-publish').checked = document.getElementById('dash-pub-'+channelId)?.checked || false;
+  await bindProviderModel('run-llm-provider', 'run-llm-model-wrap', sub.llm_provider || '', sub.llm_model || '');
+  await bindAgent('run-agent', sub.agent_id || '', '(agente de la suscripción)');
+  $('#run-modal').style.display = 'flex';
+}
+function closeRunModal(){ $('#run-modal').style.display = 'none'; RUN_MODAL_CHANNEL = ''; }
+async function confirmRunModal(){
+  const channelId = RUN_MODAL_CHANNEL;
+  if(!channelId) return;
+  const publish = $('#run-publish').checked;
+  const override = {
+    llm_provider: $('#run-llm-provider') ? ($('#run-llm-provider').value || null) : null,
+    llm_model: fieldValue('run-llm-model'),
+    agent_id: $('#run-agent') ? ($('#run-agent').value || null) : null,
+  };
+  closeRunModal();
+  const out = $('#dash-out');
+  out.innerHTML = `<p class="spin">⏳ Ejecutando… (persiste + cache${publish?' y publica en Discord':', no publica'})</p>`;
   try{
     const data = await api('/api/run/subscription', {method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify({channel_id: channelId, force:false, publish:false})});
-    dashRenderOut(data, '✔ persistido · cache actualizada · no se publicó');
+      body: JSON.stringify(Object.assign({channel_id: channelId, force:false, publish}, override))});
+    dashRenderOut(data, publish
+      ? '✔ persistido · cache actualizada · publicado en Discord'
+      : '✔ persistido · cache actualizada · no se publicó');
     toast('Corrida completa');
     loadDashboards();
   }catch(e){ out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
@@ -488,6 +593,7 @@ async function loadChat(){
     await loadChatSessions();
     renderThread([]);
     renderChatCatalog();
+    bindProviderModel('chat-llm-provider', 'chat-llm-model-wrap', '', '');
   }catch(e){
     const box = $('#chat-thread'); if(box) box.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`;
   }
@@ -714,27 +820,13 @@ function renderChatSide(){
   }).join('');
 }
 
-// Open an artifact group: select its newest version, load the FULL originating
-// thread (paginated backwards) and anchor the composer so a new message grounds
-// on it (about_artifact). Multiple summary versions of the same thread are
-// navigable with ◀/▶, like the dashboard carousel.
+// Open an artifact group: anchor on its newest version (for message loading and
+// grounding new chat messages) and render the full thread with every summary run
+// interleaved chronologically among the originating messages.
 let ART_THREAD = null;
 function openArtifact(j){
   const g = CHAT_ARTIFACTS[j]; if(!g || !g.versions || !g.versions.length) return;
-  ART_THREAD = {group:g, vIndex:0, artifact:g.versions[0], offset:0, hasMore:false, loading:false, messages:[]};
-  applyArtifactSelection();
-  loadArtifactThread(true);
-}
-
-// Switch to another version of the currently-open artifact group.
-function setArtifactVersion(delta){
-  if(!ART_THREAD || !ART_THREAD.group) return;
-  const vers = ART_THREAD.group.versions || [];
-  const idx = ART_THREAD.vIndex + delta;
-  if(idx < 0 || idx >= vers.length) return;
-  ART_THREAD.vIndex = idx;
-  ART_THREAD.artifact = vers[idx];
-  ART_THREAD.offset = 0; ART_THREAD.hasMore = false; ART_THREAD.messages = [];
+  ART_THREAD = {group:g, artifact:g.versions[0], offset:0, hasMore:false, loading:false, messages:[]};
   applyArtifactSelection();
   loadArtifactThread(true);
 }
@@ -786,29 +878,31 @@ async function loadArtifactThread(reset){
 
 function renderArtifactThread(){
   const box = $('#chat-thread'); if(!box || !ART_THREAD) return;
-  const a = ART_THREAD.artifact;
-  const vers = ART_THREAD.group ? (ART_THREAD.group.versions || []) : [];
-  const n = vers.length;
-  let nav = '';
-  if(n > 1){
-    const i = ART_THREAD.vIndex;
-    const model = a.model || '—';
-    nav = `<div class="ver-nav">`
-      + `<button class="ver-btn" onclick="setArtifactVersion(-1)" ${i>=n-1?'disabled':''}>◀</button>`
-      + `<span class="ver-label">versión ${i+1} / ${n} · 🤖 ${esc(model)} · ${esc(shortDate(a.last)||'')}</span>`
-      + `<button class="ver-btn" onclick="setArtifactVersion(1)" ${i<=0?'disabled':''}>▶</button>`
-      + `</div>`;
-  }
-  const summary = a.summary
-    ? `<div class="ctx-card"><div class="ctx-head">📄 ${esc(a.title)} · ${esc(a.kind)}</div>`
-      + `<div class="ctx-body">${esc(a.summary)}</div></div>`
-    : '';
+  const versions = (ART_THREAD.group && ART_THREAD.group.versions) ? ART_THREAD.group.versions : [];
+  const total = versions.length;
   const more = ART_THREAD.hasMore
     ? `<button class="thread-more" onclick="loadArtifactThread(false)">Cargar mensajes anteriores</button>` : '';
-  const msgs = ART_THREAD.messages.length
-    ? ART_THREAD.messages.map(m => `<div class="bubble msg"><span class="b-author">${esc(m.author||'')}</span>${esc(m.text||'')}<span class="b-meta">${esc(shortDate(m.timestamp)||'')}</span></div>`).join('')
-    : '<p class="muted" style="font-size:.85rem">(sin mensajes de origen para este artifact)</p>';
-  box.innerHTML = nav + summary + more + msgs
+  // One chronological timeline: the originating messages plus every summary run,
+  // sorted by time so each re-run appears in place among the messages (instead
+  // of a carousel that only shows one version at a time).
+  const items = [];
+  ART_THREAD.messages.forEach(m => items.push({ts:String(m.timestamp||''), type:'msg', m}));
+  versions.forEach((v,i) => items.push({ts:String(v.ts||v.last||''), type:'sum', v, i}));
+  items.sort((x,y) => (x.ts||'').localeCompare(y.ts||''));
+  const body = items.map(it => {
+    if(it.type === 'msg'){
+      const m = it.m;
+      return `<div class="bubble msg"><span class="b-author">${esc(m.author||'')}</span>${esc(m.text||'')}<span class="b-meta">${esc(shortDate(m.timestamp)||'')}</span></div>`;
+    }
+    const v = it.v;
+    // versions are newest-first, so index 0 is the latest run.
+    const label = total > 1 ? `Resumen · corrida ${total - it.i}/${total}` : 'Resumen';
+    const meta = [label, v.model?('🤖 '+esc(v.model)):'', v.ts?esc(shortDate(v.ts)):''].filter(Boolean).join(' · ');
+    return `<div class="ctx-card"><div class="ctx-head">📄 ${esc(v.title||ART_THREAD.group.title||'')} · ${meta}</div>`
+      + `<div class="ctx-body">${esc(v.summary||'')}</div></div>`;
+  }).join('');
+  const empty = items.length ? '' : '<p class="muted" style="font-size:.85rem">(sin mensajes de origen para este artifact)</p>';
+  box.innerHTML = more + body + empty
     + `<p class="muted" style="font-size:.8rem;margin:.5rem 0 0">Escribí abajo para enriquecer este conocimiento con el agente elegido.</p>`;
 }
 
@@ -880,6 +974,8 @@ async function sendChat(){
     session_id: $('#chat-session').value.trim() || null,
     title: $('#chat-title').value.trim() || null,
     about_artifact: ABOUT_ARTIFACT || null,
+    llm_provider: $('#chat-llm-provider') ? ($('#chat-llm-provider').value || null) : null,
+    llm_model: fieldValue('chat-llm-model'),
   };
   if(!body.message){ toast('Escribí un mensaje', false); return; }
   if(!body.workspace){
@@ -920,6 +1016,8 @@ async function loadPreview(){
       sel.innerHTML = d.subscriptions.map(s =>
         `<option value="${s.channel_id}">${esc(s.name||s.channel_id)} · ${esc(s.kind)}</option>`).join('');
     }
+    bindProviderModel('pv-llm-provider', 'pv-llm-model-wrap', '', '');
+    bindAgent('pv-agent', '', '(por defecto)');
   }catch(e){ /* ignore */ }
 }
 function renderPreview(data){
@@ -940,16 +1038,23 @@ async function runPreview(promise){
   try{ renderPreview(await promise); }
   catch(e){ out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
 }
+function pvOverride(){
+  return {
+    llm_provider: $('#pv-llm-provider') ? ($('#pv-llm-provider').value || null) : null,
+    llm_model: fieldValue('pv-llm-model'),
+    agent_id: $('#pv-agent') ? ($('#pv-agent').value || null) : null,
+  };
+}
 function previewSubscription(){
   const channel_id = $('#pv-sub').value;
   if(!channel_id){ toast('No hay suscripción para previsualizar', false); return; }
   runPreview(api('/api/preview/subscription', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({channel_id, extra_instructions: agentExtra()})}));
+    body: JSON.stringify(Object.assign({channel_id, extra_instructions: agentExtra()}, pvOverride()))}));
 }
 function runSubscription(){
   const channel_id = $('#pv-sub').value;
   if(!channel_id){ toast('No hay suscripción para ejecutar', false); return; }
-  const body = {channel_id, force: $('#pv-force').checked, publish: $('#pv-publish').checked, extra_instructions: agentExtra()};
+  const body = Object.assign({channel_id, force: $('#pv-force').checked, publish: $('#pv-publish').checked, extra_instructions: agentExtra()}, pvOverride());
   execRun('/api/run/subscription', body);
 }
 function runAll(){
@@ -975,7 +1080,7 @@ function previewGithub(){
   if(!repo){ toast('Escribí owner/repo', false); return; }
   const limit = parseInt($('#pv-limit').value, 10) || 30;
   runPreview(api('/api/preview/github', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({repo, limit, extra_instructions: agentExtra()})}));
+    body: JSON.stringify(Object.assign({repo, limit, extra_instructions: agentExtra()}, pvOverride()))}));
 }
 
 function toggleNav(){
@@ -987,7 +1092,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $$('nav button').forEach(b => b.addEventListener('click', () => tab(b.dataset.tab)));
   const thread = $('#chat-thread'); if(thread) thread.addEventListener('scroll', onThreadScroll);
   try{ if(localStorage.getItem('kaos-nav-collapsed')==='1') $('#shell').classList.add('collapsed'); }catch(e){}
-  tab('chat');
+  tab('dashboards');
 });
 """
 
@@ -1010,20 +1115,16 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
       <button class="collapse" onclick="toggleNav()" title="Colapsar/expandir"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
     </div>
     <nav>
-      <button data-tab="chat"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg></span><span class="lbl">Chat</span></button>
-      <button data-tab="subscriptions"><span class="ic"><svg viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"></path><path d="M4 4a16 16 0 0 1 16 16"></path><circle cx="5" cy="19" r="1"></circle></svg></span><span class="lbl">Subscriptions</span></button>
       <button data-tab="dashboards"><span class="ic"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></span><span class="lbl">Dashboards</span></button>
+      <button data-tab="subscriptions"><span class="ic"><svg viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"></path><path d="M4 4a16 16 0 0 1 16 16"></path><circle cx="5" cy="19" r="1"></circle></svg></span><span class="lbl">Subscriptions</span></button>
       <button data-tab="preview"><span class="ic"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></span><span class="lbl">Vista previa</span></button>
+      <button data-tab="chat"><span class="ic"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg></span><span class="lbl">Chat</span></button>
       <div class="nav-group"><span class="lbl">Configuración</span></div>
-      <button data-tab="providers"><span class="ic"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"></rect><rect x="2" y="13" width="20" height="8" rx="2"></rect><line x1="6" y1="7" x2="6.01" y2="7"></line><line x1="6" y1="17" x2="6.01" y2="17"></line></svg></span><span class="lbl">Providers</span></button>
       <button data-tab="agents"><span class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg></span><span class="lbl">Agentes</span></button>
+      <button data-tab="providers"><span class="ic"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"></rect><rect x="2" y="13" width="20" height="8" rx="2"></rect><line x1="6" y1="7" x2="6.01" y2="7"></line><line x1="6" y1="17" x2="6.01" y2="17"></line></svg></span><span class="lbl">Providers</span></button>
     </nav>
   </aside>
   <div class="content">
-    <header>
-      <h1>{title}</h1>
-      <div class="meta">Chat, Subscriptions, Dashboards, Vista previa · Configuración (Providers, Agentes)</div>
-    </header>
     <main>
   <section id="tab-providers" class="tab">
     <h2>Proveedor LLM activo</h2>
@@ -1032,7 +1133,8 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
         <div><label for="provider-select">Provider</label>
           <select id="provider-select"></select></div>
         <div><label for="model-input">Modelo</label>
-          <input id="model-input" placeholder="gpt-4o-mini"></div>
+          <div id="model-input-wrap" data-model-id="model-input">
+            <input id="model-input" placeholder="gpt-4o-mini"></div></div>
       </div>
       <div class="row" style="margin-top:1rem">
         <button class="act" onclick="saveProvider()">Guardar</button>
@@ -1053,10 +1155,6 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
   </section>
 
   <section id="tab-chat" class="tab">
-    <h2>Chat</h2>
-    <p class="muted">Historial arriba, mensaje abajo. En el panel izquierdo están tus chats agrupados por
-      proyecto (con buscador); al elegir uno se carga la conversación completa. Elegí el agente y, en
-      <em>Más opciones</em>, el workspace y el resto.</p>
     <div class="chat-layout">
       <aside class="chat-side">
         <input id="chat-search" autocomplete="off" placeholder="Buscar en el conocimiento…" oninput="filterChatSide()">
@@ -1097,6 +1195,10 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
                 <input id="chat-project" autocomplete="off" placeholder="(se autodetecta del workspace)"></div>
               <div style="grid-column:1 / -1"><label for="chat-title">Título</label>
                 <input id="chat-title" autocomplete="off" placeholder="opcional"></div>
+              <div><label for="chat-llm-provider">Proveedor LLM (opcional)</label>
+                <select id="chat-llm-provider"></select></div>
+              <div><label for="chat-llm-model">Modelo (opcional)</label>
+                <div id="chat-llm-model-wrap" data-model-id="chat-llm-model"></div></div>
             </div>
           </details>
         </div>
@@ -1123,6 +1225,12 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
           <select id="sub-related" multiple size="3"></select></div>
         <div><label>Publicar por defecto al ejecutar</label>
           <label class="row" style="color:#8a93a2;font-size:.85rem"><input type="checkbox" id="sub-publish" checked style="width:auto;margin-right:.4rem"> el scheduler publica esta suscripción</label></div>
+        <div><label for="sub-llm-provider">Proveedor LLM (opcional)</label>
+          <select id="sub-llm-provider"></select></div>
+        <div><label for="sub-llm-model">Modelo (opcional)</label>
+          <div id="sub-llm-model-wrap" data-model-id="sub-llm-model"></div></div>
+        <div><label for="sub-agent">Agente (opcional)</label>
+          <select id="sub-agent"></select></div>
       </div>
       <div class="row" style="margin-top:1rem">
         <button class="act" id="sub-submit" onclick="submitSub()">Suscribir</button>
@@ -1155,6 +1263,14 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
         <input type="checkbox" id="pv-publish" style="width:auto;margin-right:.4rem">
         Publicar en Discord (por defecto solo persiste)
       </label>
+      <div class="grid" style="margin-top:.6rem">
+        <div><label for="pv-llm-provider">Proveedor LLM (opcional)</label>
+          <select id="pv-llm-provider"></select></div>
+        <div><label for="pv-llm-model">Modelo (opcional)</label>
+          <div id="pv-llm-model-wrap" data-model-id="pv-llm-model"></div></div>
+        <div><label for="pv-agent">Agente (opcional)</label>
+          <select id="pv-agent"></select></div>
+      </div>
       <div class="muted">«Ejecutar» corre el pipeline real: guarda los resúmenes y llena la cache
         de conocimiento. Sin «Publicar», <strong>no se envía a Discord</strong>. «Previsualizar» solo muestra.</div>
     </div>
@@ -1174,8 +1290,8 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
 
   <section id="tab-dashboards" class="tab">
     <h2>Dashboards disponibles</h2>
-    <p class="muted">Cada workspace muestra sus KPIs. <strong>Previsualizar</strong> genera un resumen sin publicar;
-      <strong>Ejecutar</strong> persiste y actualiza la cache de conocimiento (no publica en Discord).</p>
+    <p class="muted">Cada workspace muestra sus KPIs. <strong>Ejecutar</strong> persiste y actualiza la cache de
+      conocimiento; marcá <strong>Publicar</strong> (refleja el estado de la suscripción) para además enviarlo a Discord.</p>
     <div id="dashboards"></div>
     <div id="dash-out" style="margin-top:1rem"></div>
   </section>
@@ -1183,6 +1299,28 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
   </div>
 </div>
 <div id="toast"></div>
+<div id="run-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);align-items:center;justify-content:center;z-index:50">
+  <div class="card" style="max-width:480px;width:90%;margin:0">
+    <h3 style="margin-top:0">Ejecutar dashboard</h3>
+    <p class="muted" id="run-modal-sub"></p>
+    <div class="grid">
+      <div><label for="run-llm-provider">Proveedor LLM</label>
+        <select id="run-llm-provider"></select></div>
+      <div><label for="run-llm-model">Modelo</label>
+        <div id="run-llm-model-wrap" data-model-id="run-llm-model"></div></div>
+      <div><label for="run-agent">Agente</label>
+        <select id="run-agent"></select></div>
+    </div>
+    <label class="row" style="margin-top:.6rem;color:#8a93a2;font-size:.85rem">
+      <input type="checkbox" id="run-publish" style="width:auto;margin-right:.4rem">
+      Publicar en Discord (por defecto solo persiste + cache)
+    </label>
+    <div class="row" style="margin-top:1rem">
+      <button class="act" onclick="confirmRunModal()">Ejecutar</button>
+      <button class="act ghost" onclick="closeRunModal()">Cancelar</button>
+    </div>
+  </div>
+</div>
 <script>{_SCRIPT}</script>
 </body>
 </html>

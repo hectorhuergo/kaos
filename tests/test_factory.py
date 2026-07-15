@@ -9,10 +9,12 @@ from kaos.bootstrap.factory import build_llm, build_runtime
 from kaos.core.config import Settings
 from kaos.plugins.providers import (
     ANTHROPIC_BASE_URL,
+    COPILOT_BASE_URL,
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_OLLAMA_MODEL,
     GITHUB_MODELS_BASE_URL,
     OLLAMA_BASE_URL,
+    CopilotLLMProvider,
     OpenAICompatibleLLMProvider,
 )
 from kaos.plugins.publishers import ConsolePublisher
@@ -30,6 +32,27 @@ def test_build_llm_github() -> None:
     assert isinstance(llm, OpenAICompatibleLLMProvider)
     assert llm.name == "github-models"
     assert llm._base_url == GITHUB_MODELS_BASE_URL  # type: ignore[attr-defined]
+
+
+def test_build_llm_copilot() -> None:
+    settings = Settings.from_env(
+        {"KAOS_LLM_PROVIDER": "copilot", "KAOS_COPILOT_TOKEN": "gho_x"}
+    )
+    llm = build_llm(settings)
+    assert isinstance(llm, CopilotLLMProvider)
+    assert llm.name == "copilot"
+    assert llm._base_url == COPILOT_BASE_URL  # type: ignore[attr-defined]
+
+
+def test_build_llm_copilot_honours_model() -> None:
+    settings = Settings.from_env(
+        {
+            "KAOS_LLM_PROVIDER": "copilot",
+            "KAOS_COPILOT_TOKEN": "gho_x",
+            "KAOS_LLM_MODEL": "gpt-4.1",
+        }
+    )
+    assert build_llm(settings)._model == "gpt-4.1"  # type: ignore[attr-defined]
 
 
 def test_build_llm_anthropic_defaults_to_haiku() -> None:

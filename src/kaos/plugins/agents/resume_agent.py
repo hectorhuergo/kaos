@@ -52,9 +52,16 @@ class ResumeAgent:
 
     name = "resume-agent"
 
-    def __init__(self, llm: LLMProvider, *, extra_instructions: str = "") -> None:
+    def __init__(
+        self, llm: LLMProvider, *, extra_instructions: str = "", agent_id: str | None = None
+    ) -> None:
         self._llm = llm
         self._extra_instructions = extra_instructions.strip()
+        # The agent this run is attributed to. Defaults to the resume-agent
+        # identity; a subscription/console run may select another agent, which is
+        # stamped on the artifact so surfaces (dashboards, metrics) attribute the
+        # knowledge to the chosen agent.
+        self._agent_id = (agent_id or "").strip() or None
 
     def _system_prompt(self) -> str:
         """The base prompt, optionally augmented with user instructions.
@@ -124,6 +131,13 @@ class ResumeAgent:
             )
         ]
 
+    def _origin_metadata(self, events: Sequence[Event]) -> dict[str, str]:
+        """Metadata carried on the summary: origin channel + attributed agent."""
+        meta = dict(self._channel_metadata(events))
+        if self._agent_id:
+            meta["agent_id"] = self._agent_id
+        return meta
+
     @staticmethod
     def _transcript(events: Sequence[Event]) -> list[dict[str, str]]:
         """Embed the originating messages so the thread travels with the summary.
@@ -147,7 +161,7 @@ class ResumeAgent:
         return out
 
     @staticmethod
-    def _origin_metadata(events: Sequence[Event]) -> dict[str, str]:
+    def _channel_metadata(events: Sequence[Event]) -> dict[str, str]:
         """Carry the originating channel forward when unambiguous."""
         channels = {
             str(e.payload["channel_id"]) for e in events if e.payload.get("channel_id")

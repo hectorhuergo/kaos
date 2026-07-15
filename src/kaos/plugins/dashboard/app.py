@@ -18,6 +18,7 @@ Routes:
 - ``GET  /api/agents``               → the catalog of agents KAOS ships.
 - ``PUT  /api/agents/{id}/instructions`` → persist an agent's extra prompt.
 - ``GET  /api/providers``            → LLM provider catalog + persisted choice.
+- ``GET  /api/providers/{id}/models`` → best-effort model list for the selector.
 - ``PUT  /api/config/provider``      → persist the active provider + model.
 - ``PUT  /api/providers/{id}/credential`` → persist a provider's secret.
 - ``DELETE /api/providers/{id}/credential`` → clear a provider's secret.
@@ -46,6 +47,7 @@ from kaos.bootstrap.factory import (
     build_credential_store,
     build_storage,
     build_subscription_store,
+    list_models,
 )
 from kaos.core.agents import agent_catalog
 from kaos.core.config import LLM_PROVIDERS, Settings
@@ -111,6 +113,9 @@ class GitHubPreviewInput(BaseModel):
     repo: str
     limit: int = 30
     extra_instructions: str = ""
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    agent_id: str | None = None
 
 
 class SubscriptionPreviewInput(BaseModel):
@@ -118,6 +123,9 @@ class SubscriptionPreviewInput(BaseModel):
 
     channel_id: str
     extra_instructions: str = ""
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    agent_id: str | None = None
 
 
 class SubscriptionRunInput(BaseModel):
@@ -127,6 +135,9 @@ class SubscriptionRunInput(BaseModel):
     force: bool = False
     publish: bool = False
     extra_instructions: str = ""
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    agent_id: str | None = None
 
 
 class RunAllInput(BaseModel):
@@ -148,6 +159,9 @@ class SubscriptionInput(BaseModel):
     project: str | None = None
     publish_default: bool = True
     related_to: list[str] = []
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    agent_id: str | None = None
 
 
 class SubscriptionPatch(BaseModel):
@@ -161,6 +175,9 @@ class SubscriptionPatch(BaseModel):
     project: str | None = None
     publish_default: bool | None = None
     related_to: list[str] | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    agent_id: str | None = None
 
 
 class AgentInstructionsInput(BaseModel):
@@ -181,12 +198,22 @@ class ChatInput(BaseModel):
     session_id: str | None = None
     title: str | None = None
     about_artifact: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
 
 
 async def _close(obj: object) -> None:
     close = getattr(obj, "close", None)
     if close is not None:
         await close()
+
+
+def _clean_opt(value: str | None) -> str | None:
+    """Normalize an optional text field: strip, empty → ``None``."""
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
 
 
 def create_app(
@@ -436,6 +463,18 @@ def create_app(
             "persistent": bool(cfg.database_url),
         }
 
+    @app.get("/api/providers/{provider}/models")
+    async def api_provider_models(provider: str) -> dict[str, Any]:
+        """Best-effort list of a provider's models for the console selector.
+
+        Returns ``{"models": [...]}`` — an empty list when the provider cannot
+        be listed (no credential, unreachable, unsupported), so the UI falls back
+        to a free-text model field.
+        """
+        if provider not in LLM_PROVIDERS:
+            raise HTTPException(status_code=404, detail="unknown provider")
+        return {"models": await list_models(cfg, provider)}
+
     @app.get("/api/chat/sessions")
     async def api_chat_sessions(
         workspace: str | None = Query(default=None),
@@ -493,6 +532,8 @@ def create_app(
                 session_id=body.session_id,
                 title=body.title,
                 about_artifact=body.about_artifact,
+                llm_provider=body.llm_provider,
+                llm_model=body.llm_model,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -572,6 +613,9 @@ def create_app(
                     "project": s.project,
                     "publish_default": s.publish_default,
                     "related_to": list(s.related_to),
+                    "llm_provider": s.llm_provider,
+                    "llm_model": s.llm_model,
+                    "agent_id": s.agent_id,
                     "active": s.active,
                     "created_at": s.created_at.isoformat(),
                 }
@@ -599,11 +643,14 @@ def create_app(
             project=(sub.project.strip() if sub.project and sub.project.strip() else None),
             publish_default=sub.publish_default,
             related_to=[w.strip() for w in sub.related_to if w.strip()],
+            llm_provider=_clean_opt(sub.llm_provider),
+            llm_model=_clean_opt(sub.llm_model),
+            agent_id=_clean_opt(sub.agent_id),
         )
         await _subs().add(subscription)
         return {"channel_id": subscription.channel_id, "workspace": subscription.workspace}
 
-    @app.patch("/api/subscriptions/{channel_id}")
+    @app.patch("/api/subscriptions/{channel_id:path}")
     async def api_edit_subscription(
         channel_id: str, patch: SubscriptionPatch = Body(...)
     ) -> dict[str, Any]:
@@ -629,6 +676,12 @@ def create_app(
                 for w in patch.related_to
                 if w.strip() and w.strip() != current.workspace
             ]
+        if "llm_provider" in fields:
+            updates["llm_provider"] = _clean_opt(patch.llm_provider)
+        if "llm_model" in fields:
+            updates["llm_model"] = _clean_opt(patch.llm_model)
+        if "agent_id" in fields:
+            updates["agent_id"] = _clean_opt(patch.agent_id)
         updated = current.model_copy(update=updates)
         await _subs().add(updated)
         return {
@@ -636,9 +689,12 @@ def create_app(
             "project": updated.project,
             "publish_default": updated.publish_default,
             "related_to": list(updated.related_to),
+            "llm_provider": updated.llm_provider,
+            "llm_model": updated.llm_model,
+            "agent_id": updated.agent_id,
         }
 
-    @app.delete("/api/subscriptions/{channel_id}")
+    @app.delete("/api/subscriptions/{channel_id:path}")
     async def api_remove_subscription(channel_id: str) -> dict[str, Any]:
         found = await _subs().deactivate(channel_id)
         if not found:
@@ -647,16 +703,25 @@ def create_app(
 
     # ---- Dry-run previews (summarize without publishing to Discord) ----
 
-    async def _effective_instructions(provided: str) -> str:
+    async def _effective_instructions(provided: str, agent_id: str | None = None) -> str:
         """Use the request's instructions, or fall back to the persisted ones.
 
-        The summary pipeline augments the Resume Agent's prompt; when a caller
-        does not pass instructions we apply the ones saved from the console so a
-        stored preference also applies to scheduled/headless runs.
+        The summary pipeline augments the selected agent's prompt; when a caller
+        does not pass instructions we apply the ones saved from the console for
+        that agent (defaulting to the resume-agent) so a stored preference also
+        applies to scheduled/headless runs.
         """
         if provided.strip():
             return provided
-        return (await _current_config()).agent_instructions.get("resume-agent", "")
+        key = (agent_id or "").strip() or "resume-agent"
+        return (await _current_config()).agent_instructions.get(key, "")
+
+    async def _effective_agent(channel_id: str, agent_id: str | None) -> str | None:
+        """The agent that will process a subscription: override, else stored."""
+        if agent_id and agent_id.strip():
+            return agent_id.strip()
+        sub = await _subs().get(channel_id)
+        return sub.agent_id if sub is not None else None
 
     @app.post("/api/preview/github")
     async def api_preview_github(
@@ -665,7 +730,12 @@ def create_app(
         try:
             artifacts = await preview_github(
                 cfg, body.repo, limit=body.limit,
-                extra_instructions=await _effective_instructions(body.extra_instructions),
+                extra_instructions=await _effective_instructions(
+                    body.extra_instructions, body.agent_id
+                ),
+                llm_provider=body.llm_provider,
+                llm_model=body.llm_model,
+                agent_id=body.agent_id,
             )
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -678,7 +748,13 @@ def create_app(
         try:
             artifacts = await preview_subscription(
                 cfg, body.channel_id, subscription_store=_subs(),
-                extra_instructions=await _effective_instructions(body.extra_instructions),
+                extra_instructions=await _effective_instructions(
+                    body.extra_instructions,
+                    await _effective_agent(body.channel_id, body.agent_id),
+                ),
+                llm_provider=body.llm_provider,
+                llm_model=body.llm_model,
+                agent_id=body.agent_id,
             )
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -697,7 +773,13 @@ def create_app(
                 subscription_store=_subs(),
                 force=body.force,
                 publish=body.publish,
-                extra_instructions=await _effective_instructions(body.extra_instructions),
+                extra_instructions=await _effective_instructions(
+                    body.extra_instructions,
+                    await _effective_agent(body.channel_id, body.agent_id),
+                ),
+                llm_provider=body.llm_provider,
+                llm_model=body.llm_model,
+                agent_id=body.agent_id,
             )
         except RunError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

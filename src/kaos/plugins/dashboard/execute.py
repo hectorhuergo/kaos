@@ -68,6 +68,9 @@ async def run_subscription(
     force: bool = False,
     consolidated: bool = True,
     extra_instructions: str = "",
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    agent_id: str | None = None,
 ) -> list[Artifact]:
     """Run a subscription for real (persist + cache), optionally publishing.
 
@@ -76,10 +79,19 @@ async def run_subscription(
     published. With ``publish=True`` the result is also sent to the configured
     publisher (Discord); otherwise nothing is posted. ``force`` re-summarizes
     ignoring the cache; otherwise unchanged conversations reuse the cache.
+
+    The LLM override defaults to the subscription's stored ``llm_provider``/
+    ``llm_model``; an explicit ``llm_provider``/``llm_model`` argument (e.g. from
+    the dashboard confirm modal) wins for this run. ``agent_id`` likewise
+    defaults to the subscription's stored agent.
     """
     subscription = await subscription_store.get(channel_id)
     if subscription is None:
         raise RunError(f"no existe una suscripción para {channel_id}")
+
+    provider = llm_provider or subscription.llm_provider
+    model = llm_model or subscription.llm_model
+    agent = agent_id or subscription.agent_id
 
     # Publish to *this subscription's* resume thread when it has one, falling back
     # to the global default only when the subscription does not set it. Without
@@ -108,6 +120,9 @@ async def run_subscription(
                 settings=run_settings,
                 publisher=publisher,
                 extra_instructions=extra_instructions,
+                llm_provider=provider,
+                llm_model=model,
+                agent_id=agent,
             )
         elif subscription.kind == GITHUB:
             rc = await run_github(
@@ -116,6 +131,9 @@ async def run_subscription(
                 settings=run_settings,
                 publisher=publisher,
                 extra_instructions=extra_instructions,
+                llm_provider=provider,
+                llm_model=model,
+                agent_id=agent,
             )
         else:
             rc = await run_backfill(
@@ -124,6 +142,9 @@ async def run_subscription(
                 settings=run_settings,
                 publisher=publisher,
                 extra_instructions=extra_instructions,
+                llm_provider=provider,
+                llm_model=model,
+                agent_id=agent,
             )
     except httpx.HTTPError as exc:
         raise RunError(_http_message(exc)) from exc

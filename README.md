@@ -109,12 +109,13 @@ credenciales); `kaos up` a secas arranca el runtime según tu `.env`.
 
 | Variable | Descripción |
 |----------|-------------|
-| `KAOS_LLM_PROVIDER` | `echo` (default), `openai`, `github` o `anthropic` |
+| `KAOS_LLM_PROVIDER` | `echo` (default), `openai`, `github`, `copilot`, `anthropic` u `ollama` |
 | `KAOS_LLM_MODEL` | Modelo, p. ej. `gpt-4o-mini` o `claude-3-5-haiku-latest` |
 | `KAOS_LLM_API_KEY` | API key para `openai` |
 | `KAOS_LLM_BASE_URL` | Endpoint OpenAI-compatible (OpenAI, Azure, Ollama…) |
 | `KAOS_LLM_TIMEOUT` | Timeout (s) por llamada al LLM; súbelo para modelos de razonamiento (default 120) |
 | `KAOS_GITHUB_TOKEN` / `GITHUB_TOKEN` | Token para GitHub Models (`github`) |
+| `KAOS_COPILOT_TOKEN` | Token de GitHub Copilot (`copilot`); obtenelo con `kaos copilot login` |
 | `KAOS_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | API key para Claude (`anthropic`) |
 | `KAOS_DISCORD_TOKEN` | Token del bot; si está, usa Discord real |
 | `KAOS_DISCORD_GUILD_ID` | Guild a observar (workspace) |
@@ -231,8 +232,21 @@ imprimen secretos):
 kaos providers
 ```
 
-Seleccioná con `KAOS_LLM_PROVIDER=<echo|openai|github|anthropic>` y
-`KAOS_LLM_MODEL=<modelo>`.
+Seleccioná con `KAOS_LLM_PROVIDER=<echo|openai|github|copilot|anthropic|ollama>` y
+`KAOS_LLM_MODEL=<modelo>`. Este es el default global; desde la consola web podés
+además elegir proveedor + modelo **por corrida** (Chat, Vista previa, el modal de
+Dashboards) y **por suscripción** (persistente: lo respetan el scheduler y
+`kaos run`). El selector se puebla con los modelos que expone cada proveedor
+(`GET /api/providers/{id}/models`); si no puede listarlos, queda un campo de texto.
+
+Para **GitHub Copilot** (requiere suscripción) autenticá con el device flow:
+
+```bash
+kaos copilot login     # abrí la URL, ingresá el código; guarda el token
+kaos copilot status    # verifica que el token pueda generar una sesión
+```
+
+Luego activá `KAOS_LLM_PROVIDER=copilot`.
 
 ### Scheduler (Beta)
 
