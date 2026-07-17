@@ -150,6 +150,14 @@ def test_console_page_is_html(client: TestClient) -> None:
     assert "Providers" in resp.text and "Subscriptions" in resp.text
 
 
+def test_console_includes_markdown_rendering(client: TestClient) -> None:
+    # Chat bubbles preview Markdown via CDN libs with a graceful offline fallback.
+    html = client.get("/console").text
+    assert "markdown-it@" in html and "dompurify@" in html
+    assert "function renderMarkdown(" in html
+    assert "DOMPurify.sanitize(" in html
+
+
 def test_providers_lists_catalog(client: TestClient) -> None:
     resp = client.get("/api/providers")
     assert resp.status_code == 200

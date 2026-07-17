@@ -15,6 +15,7 @@ Routes:
 - ``GET  /api/chat/sessions``        → chat sessions derived from stored turns.
 - ``GET  /api/chat/thread``          → ordered messages of one chat session.
 - ``POST /api/chat/send``            → persist a chat turn and generate a reply.
+- ``POST /api/chat/cancel``          → cancel an in-flight chat turn for a session.
 - ``GET  /api/agents``               → the catalog of agents KAOS ships.
 - ``PUT  /api/agents/{id}/instructions`` → persist an agent's extra prompt.
 - ``GET  /api/providers``            → LLM provider catalog + persisted choice.
@@ -38,6 +39,7 @@ environment as fallback); they are write-only over the API — never returned.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel
@@ -49,6 +51,7 @@ from kaos.bootstrap.factory import (
     build_subscription_store,
     list_models,
 )
+from kaos.contracts.llm import LLMError
 from kaos.core.agents import agent_catalog
 from kaos.core.config import LLM_PROVIDERS, Settings
 from kaos.core.knowledge import relate_workspaces
@@ -65,6 +68,7 @@ from kaos.plugins.dashboard.chat import (
     send_message,
     session_thread,
 )
+from kaos.plugins.dashboard.chat_manager import get_chat_manager
 from kaos.plugins.dashboard.console import render_console
 from kaos.plugins.dashboard.directory import (
     resolve_header,
@@ -200,6 +204,13 @@ class ChatInput(BaseModel):
     about_artifact: str | None = None
     llm_provider: str | None = None
     llm_model: str | None = None
+
+
+class ChatCancelInput(BaseModel):
+    """Request body: cancel an in-flight chat turn for a session."""
+
+    workspace: str
+    session_id: str
 
 
 async def _close(obj: object) -> None:
@@ -519,8 +530,11 @@ def create_app(
 
     @app.post("/api/chat/send")
     async def api_chat_send(body: ChatInput = Body(...)) -> dict[str, Any]:
-        try:
-            return await send_message(
+        # Run the turn as a tracked task so the console can cancel an in-flight
+        # provider call. Cancelling the task propagates through ``await
+        # llm.complete(...)``, aborting the underlying HTTP request.
+        task: asyncio.Task[dict[str, Any]] = asyncio.ensure_future(
+            send_message(
                 _store(),
                 cfg,
                 workspace=body.workspace,
@@ -535,8 +549,26 @@ def create_app(
                 llm_provider=body.llm_provider,
                 llm_model=body.llm_model,
             )
+        )
+        if body.session_id:
+            get_chat_manager().register_task(body.workspace, body.session_id, task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise HTTPException(status_code=499, detail="cancelado por el usuario") from None
+        except LLMError as exc:
+            # Surface the provider's own reason (unknown model, too large, rate
+            # limited…). Pass through an upstream 4xx; otherwise report a 502.
+            status = exc.status_code if exc.status_code and 400 <= exc.status_code < 500 else 502
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/chat/cancel")
+    async def api_chat_cancel(body: ChatCancelInput = Body(...)) -> dict[str, Any]:
+        cancelled = await get_chat_manager().cancel_task(body.workspace, body.session_id)
+        return {"cancelled": cancelled}
+
 
     @app.put("/api/config/provider")
     async def api_set_provider(choice: ProviderChoice = Body(...)) -> dict[str, Any]:

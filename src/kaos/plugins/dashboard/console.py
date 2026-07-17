@@ -1,8 +1,10 @@
 """KAOS web console: a self-contained admin page (Providers, Subscriptions, Dashboards).
 
 Rendered as a single HTML document with vanilla JS that talks to the JSON API
-exposed by :mod:`kaos.plugins.dashboard.app`. No build step and no frontend
-dependencies — it is served by ``kaos serve`` at ``/console``.
+exposed by :mod:`kaos.plugins.dashboard.app`. No build step: chat bubbles get
+optional client-side Markdown rendering via ``markdown-it`` + ``DOMPurify``
+loaded from a CDN (same pattern as the dashboard's Mermaid), degrading to
+escaped plain text when offline. It is served by ``kaos serve`` at ``/console``.
 
 The console edits durable state via the JSON API: the active LLM provider +
 model and the subscriptions, plus each provider's credential (API key/token),
@@ -110,6 +112,23 @@ pre.out{white-space:pre-wrap;word-wrap:break-word;background:#0f1115;border:1px 
 .bubble.user{align-self:flex-end;background:#1d2b4a;border:1px solid #2c3f66}
 .bubble.assistant{align-self:flex-start;background:#161a22;border:1px solid #2f3646}
 .bubble .b-meta{display:block;color:#8a93a2;font-size:.68rem;margin-top:.3rem}
+/* Rendered Markdown inside assistant bubbles (previewed .md). */
+.bubble .md{white-space:normal}
+.bubble .md>*:first-child{margin-top:0}
+.bubble .md>*:last-child{margin-bottom:0}
+.bubble .md p{margin:.4rem 0}
+.bubble .md h1,.bubble .md h2,.bubble .md h3,.bubble .md h4{margin:.6rem 0 .3rem;line-height:1.25}
+.bubble .md h1{font-size:1.1rem}.bubble .md h2{font-size:1.02rem}.bubble .md h3{font-size:.95rem}
+.bubble .md ul,.bubble .md ol{margin:.3rem 0;padding-left:1.2rem}
+.bubble .md li{margin:.15rem 0}
+.bubble .md a{color:#7aa2ff}
+.bubble .md code{background:#0f1115;border:1px solid #262b36;border-radius:5px;padding:.05rem .3rem;font-size:.85em}
+.bubble .md pre{background:#0f1115;border:1px solid #262b36;border-radius:8px;padding:.6rem .7rem;overflow:auto;margin:.4rem 0}
+.bubble .md pre code{background:none;border:none;padding:0}
+.bubble .md blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid #2f3646;color:#b9c1cd}
+.bubble .md table{border-collapse:collapse;margin:.4rem 0;font-size:.85em}
+.bubble .md th,.bubble .md td{border:1px solid #2f3646;padding:.25rem .5rem}
+.bubble .md hr{border:none;border-top:1px solid #262b36;margin:.6rem 0}
 .chat-composer{margin-top:.8rem;background:#161a22;border:1px solid #262b36;border-radius:10px;padding:.8rem}
 @media(max-width:820px){.chat-layout{grid-template-columns:1fr}.chat-side{position:static;max-height:none}}
 """
@@ -928,7 +947,8 @@ function renderThread(messages){
     }
     const cls = m.role === 'user' ? 'user' : 'assistant';
     const meta = (m.role === 'assistant' && m.model) ? `🤖 ${esc(m.model)} · ${esc(m.timestamp||'')}` : esc(m.timestamp||'');
-    return `<div class="bubble ${cls}">${esc(m.text||'')}<span class="b-meta">${meta}</span></div>`;
+    const content = m.role === 'assistant' ? renderMarkdown(m.text) : esc(m.text||'');
+    return `<div class="bubble ${cls}">${content}<span class="b-meta">${meta}</span></div>`;
   }).join('');
   box.scrollTop = box.scrollHeight;
 }
@@ -964,6 +984,12 @@ function openChatSession(i){
 }
 
 async function sendChat(){
+  if(CHAT_BUSY) return;
+  const sessEl = $('#chat-session');
+  // Ensure a stable session id up-front so an in-flight turn can be cancelled
+  // (the server keys cancellation by workspace + session_id).
+  let sessionId = sessEl.value.trim();
+  if(!sessionId){ sessionId = genId(); sessEl.value = sessionId; }
   const body = {
     workspace: $('#chat-workspace').value,
     user_id: $('#chat-user').value.trim() || 'consola',
@@ -971,7 +997,7 @@ async function sendChat(){
     message: $('#chat-message').value.trim(),
     project: $('#chat-project').value.trim() || null,
     kind: $('#chat-kind').value.trim() || 'conversation',
-    session_id: $('#chat-session').value.trim() || null,
+    session_id: sessionId,
     title: $('#chat-title').value.trim() || null,
     about_artifact: ABOUT_ARTIFACT || null,
     llm_provider: $('#chat-llm-provider') ? ($('#chat-llm-provider').value || null) : null,
@@ -985,9 +1011,10 @@ async function sendChat(){
   }
   const box = $('#chat-thread');
   // Optimistic: show the user's message immediately, then the pending reply.
-  const pending = `<div class="bubble user">${esc(body.message)}<span class="b-meta">enviando…</span></div>`
-    + '<div class="bubble assistant"><span class="spin">⏳ generando respuesta…</span></div>';
+  const pending = `<div id="chat-pending"><div class="bubble user">${esc(body.message)}<span class="b-meta">enviando…</span></div>`
+    + '<div class="bubble assistant"><span class="spin">⏳ generando respuesta…</span></div></div>';
   if(box){ box.insertAdjacentHTML('beforeend', pending); box.scrollTop = box.scrollHeight; }
+  setChatBusy(true, body.workspace, sessionId);
   try{
     const data = await api('/api/chat/send', {
       method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
@@ -1000,12 +1027,70 @@ async function sendChat(){
     loadChatSessions();
     renderChatCatalog();
   }catch(e){
-    if(box) box.insertAdjacentHTML('beforeend', `<div class="bubble assistant" style="border-color:#f8814f66">Error: ${esc(e.message)}</div>`);
+    // Drop the pending spinner; show what actually happened in its place.
+    const p = $('#chat-pending'); if(p) p.remove();
+    if(box && CHAT_CANCELLED){
+      box.insertAdjacentHTML('beforeend', '<div class="bubble assistant" style="border-color:#f8814f66">⏹ generación cancelada</div>');
+    } else if(box){
+      box.insertAdjacentHTML('beforeend', `<div class="bubble assistant" style="border-color:#f8814f66"><strong>⚠ No se pudo generar la respuesta</strong><div class="md" style="margin-top:.3rem">${esc(e.message)}</div></div>`);
+      box.scrollTop = box.scrollHeight;
+    }
+  }finally{
+    setChatBusy(false);
   }
+}
+
+// ---- Chat cancellation (stop an in-flight provider call) ----
+let CHAT_BUSY = false;
+let CHAT_CANCELLED = false;
+let CHAT_CANCEL_CTX = null;
+function genId(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g,'');
+  return 'c' + Date.now().toString(16) + Math.random().toString(16).slice(2, 10);
+}
+function setChatBusy(busy, workspace, sessionId){
+  CHAT_BUSY = busy;
+  if(busy){ CHAT_CANCELLED = false; CHAT_CANCEL_CTX = {workspace, session_id: sessionId}; }
+  else { CHAT_CANCEL_CTX = null; }
+  const send = $('#chat-send'); const cancel = $('#chat-cancel');
+  if(send){ send.disabled = busy; send.style.display = busy ? 'none' : ''; }
+  if(cancel){ cancel.style.display = busy ? '' : 'none'; }
+}
+async function cancelChat(){
+  if(!CHAT_BUSY || !CHAT_CANCEL_CTX) return;
+  const cancel = $('#chat-cancel');
+  if(cancel){ cancel.disabled = true; cancel.textContent = 'Cancelando…'; }
+  CHAT_CANCELLED = true;
+  try{
+    await api('/api/chat/cancel', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify(CHAT_CANCEL_CTX)});
+    toast('Generación cancelada');
+  }catch(e){ toast('No se pudo cancelar: '+e.message, false); CHAT_CANCELLED = false; }
+  finally{ if(cancel){ cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; } }
 }
 
 // ---- Preview (dry-run: summarize without publishing) ----
 function esc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// Render Markdown to sanitized HTML for chat bubbles. Falls back to escaped
+// plain text (with line breaks) when the CDN libs are unavailable (offline).
+let _MD = null;
+function markdown(){
+  if(_MD) return _MD;
+  if(window.markdownit){
+    _MD = window.markdownit({ html:false, linkify:true, breaks:true });
+  }
+  return _MD;
+}
+function renderMarkdown(s){
+  s = s || '';
+  const md = markdown();
+  if(!md || !window.DOMPurify){
+    return `<div class="md">${esc(s).replace(/\\n/g,'<br>')}</div>`;
+  }
+  const html = DOMPurify.sanitize(md.render(s), {USE_PROFILES:{html:true}});
+  return `<div class="md">${html}</div>`;
+}
 async function loadPreview(){
   try{
     const d = await api('/api/subscriptions');
@@ -1097,6 +1182,13 @@ document.addEventListener('DOMContentLoaded', () => {
 """
 
 
+# Optional client-side Markdown rendering for chat bubbles. Loaded from a CDN
+# (same pattern as the dashboard's Mermaid); the console degrades gracefully to
+# escaped plain text when offline, so nothing breaks without a network.
+_MARKDOWN_IT_CDN = "https://cdn.jsdelivr.net/npm/markdown-it@14/dist/markdown-it.min.js"
+_DOMPURIFY_CDN = "https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"
+
+
 def render_console(*, title: str = "KAOS — Consola") -> str:
     """Render the self-contained admin console HTML."""
     return f"""<!doctype html>
@@ -1169,7 +1261,8 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
           <textarea id="chat-message" rows="3" style="width:100%;background:#0f1115;border:1px solid #2f3646;border-radius:8px;color:#e6e6e6;padding:.5rem .6rem;font-size:.95rem" placeholder="Escribí tu mensaje…"></textarea>
           <div class="row" style="margin-top:.6rem;align-items:center">
             <div style="min-width:180px"><select id="chat-agent"></select></div>
-            <button class="act" onclick="sendChat()">Enviar</button>
+            <button id="chat-send" class="act" onclick="sendChat()">Enviar</button>
+            <button id="chat-cancel" class="act ghost" style="display:none;border-color:#f8814f66;color:#f8814f" onclick="cancelChat()">⏹ Cancelar</button>
             <button class="act ghost" onclick="newChatSession()">Nueva sesión</button>
             <div id="chat-catalog" class="chat-catalog"></div>
           </div>
@@ -1321,6 +1414,8 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
     </div>
   </div>
 </div>
+<script src="{_MARKDOWN_IT_CDN}"></script>
+<script src="{_DOMPURIFY_CDN}"></script>
 <script>{_SCRIPT}</script>
 </body>
 </html>

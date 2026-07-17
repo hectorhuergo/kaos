@@ -13,6 +13,30 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel
 
 
+class LLMError(RuntimeError):
+    """A provider-side failure while requesting a completion.
+
+    Carries a human-readable ``message`` (safe to surface in the UI) plus optional
+    context: the provider ``name``, the ``model`` and the upstream HTTP
+    ``status_code``. This keeps the Core AI-Provider-Agnostic while letting
+    callers show a meaningful error (e.g. "unknown model", "rate limited",
+    "request too large") instead of a raw transport/HTTP exception.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.status_code = status_code
+
+
 class Message(BaseModel):
     """A single chat message exchanged with a language model."""
 

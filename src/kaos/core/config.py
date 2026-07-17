@@ -50,7 +50,7 @@ class Settings(BaseModel):
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str | None = None
     llm_base_url: str | None = None
-    llm_timeout: float = 120.0
+    llm_timeout: float = 300.0
     github_token: str | None = None
     anthropic_api_key: str | None = None
     # GitHub Copilot OAuth token (gho_…) obtained via `kaos copilot login`.
@@ -111,9 +111,9 @@ class Settings(BaseModel):
 
         timeout_raw = get("KAOS_LLM_TIMEOUT")
         try:
-            llm_timeout = float(timeout_raw) if timeout_raw else 120.0
+            llm_timeout = float(timeout_raw) if timeout_raw else 300.0
         except ValueError:
-            llm_timeout = 120.0
+            llm_timeout = 300.0
 
         interval_raw = get("KAOS_SCHEDULER_INTERVAL")
         try:

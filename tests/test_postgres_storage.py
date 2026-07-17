@@ -65,3 +65,29 @@ def test_postgres_roundtrip() -> None:
 
     asyncio.run(scenario())
 
+
+def test_postgres_concurrent_first_use_initializes_once() -> None:
+    """Concurrent first-use must not deadlock and must build a single pool.
+
+    Regression: two requests hitting a fresh store at the same time both ran the
+    schema DDL on separate connections, deadlocking on ``AccessExclusiveLock``
+    (and leaking a second pool). ``_ensure_pool`` now serializes initialization
+    with a lock, so many concurrent operations share one pool and succeed.
+    """
+    from kaos.plugins.storage import PostgresStorage
+
+    workspace = f"test:{uuid4()}"
+    storage = PostgresStorage(DSN)  # type: ignore[arg-type]
+
+    async def scenario() -> None:
+        # Fire many operations before the pool exists; init must run exactly once.
+        await asyncio.gather(*(storage.list_events(workspace) for _ in range(12)))
+        pool = await storage._ensure_pool()
+        # A second wave reuses the very same pool object.
+        await asyncio.gather(*(storage.list_artifacts(workspace) for _ in range(12)))
+        assert await storage._ensure_pool() is pool
+        await storage.close()
+
+    asyncio.run(scenario())
+
+

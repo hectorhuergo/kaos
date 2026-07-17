@@ -112,3 +112,139 @@ def test_list_models_helper_returns_empty_on_failure() -> None:
     assert asyncio.run(list_models(Settings(), "echo")) == []
 
 
+def test_list_models_extracts_model_names_from_urls() -> None:
+    """GitHub Models returns azureml resource URIs; use the model ``name``.
+
+    The Azure inference host (``https://models.inference.ai.azure.com/models``)
+    returns a top-level list where ``id`` is an
+    ``azureml://…/models/<name>/versions/<n>`` URI — its last path segment is the
+    *version number*, not the model. The parser must use ``name`` instead, keep
+    plain ids untouched, and drop non-chat (embedding) entries.
+    """
+    import asyncio
+
+    import httpx
+
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "azureml://registries/azure-openai/models/gpt-4o/versions/2",
+                    "name": "gpt-4o",
+                    "task": "chat-completion",
+                },
+                {
+                    "id": "azureml://registries/azureml-meta/models/"
+                    "Meta-Llama-3.1-8B-Instruct/versions/4",
+                    "name": "Meta-Llama-3.1-8B-Instruct",
+                    "task": "chat-completion",
+                },
+                {
+                    "id": "azureml://registries/azureml-cohere/models/"
+                    "Cohere-embed-v3-english/versions/3",
+                    "name": "Cohere-embed-v3-english",
+                    "task": "embeddings",  # non-chat -> filtered out
+                },
+                {"id": "gpt-4o-mini"},  # plain OpenAI-style id, unchanged
+            ],
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(model="x", api_key="sk", client=client)
+
+    async def scenario() -> list[str]:
+        try:
+            return await provider.list_models()
+        finally:
+            await client.aclose()
+
+    # Sorted, deduped, chat-only, using ``name`` for azureml URIs.
+    assert asyncio.run(scenario()) == [
+        "Meta-Llama-3.1-8B-Instruct",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ]
+
+
+def test_complete_raises_llm_error_with_provider_message() -> None:
+    """A 4xx from the endpoint surfaces the provider's own reason, not a bare code.
+
+    GitHub Models' legacy host *lists* models (e.g. Meta-Llama) that its inference
+    endpoint then rejects with ``400 unknown_model``. The provider must raise an
+    ``LLMError`` carrying that message and the status so the UI can show it.
+    """
+    import asyncio
+
+    import httpx
+
+    from kaos.contracts.llm import LLMError, Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "unknown_model",
+                    "message": "Unknown model: meta-llama-3.1-8b-instruct",
+                }
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(
+        model="Meta-Llama-3.1-8B-Instruct", api_key="sk", client=client, name="github-models"
+    )
+
+    async def scenario() -> LLMError:
+        try:
+            try:
+                await provider.complete([Message(role="user", content="hola")])
+            except LLMError as exc:
+                return exc
+            raise AssertionError("expected LLMError")
+        finally:
+            await client.aclose()
+
+    err = asyncio.run(scenario())
+    assert err.status_code == 400
+    assert err.provider == "github-models"
+    assert err.model == "Meta-Llama-3.1-8B-Instruct"
+    assert "Unknown model: meta-llama-3.1-8b-instruct" in str(err)
+
+
+def test_complete_wraps_transport_errors_as_llm_error() -> None:
+    """A transport failure (no network) becomes an ``LLMError``, not a raw httpx one."""
+    import asyncio
+
+    import httpx
+
+    from kaos.contracts.llm import LLMError, Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(
+        model="gpt-4o-mini", api_key="sk", client=client, name="github-models"
+    )
+
+    async def scenario() -> LLMError:
+        try:
+            try:
+                await provider.complete([Message(role="user", content="hola")])
+            except LLMError as exc:
+                return exc
+            raise AssertionError("expected LLMError")
+        finally:
+            await client.aclose()
+
+    err = asyncio.run(scenario())
+    assert err.status_code is None
+    assert "No se pudo contactar a github-models" in str(err)
+

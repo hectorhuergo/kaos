@@ -8,6 +8,7 @@ can be imported without the dependency; install it with the optional extra:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from uuid import UUID
@@ -94,12 +95,37 @@ CREATE TABLE IF NOT EXISTS kaos_provider_credentials (
 """
 
 
+async def _apply_schema(pool: Any, schema: str) -> None:
+    """Run idempotent schema DDL, retrying briefly on a transient deadlock.
+
+    The schema is all ``CREATE TABLE/INDEX IF NOT EXISTS`` and ``ALTER TABLE ADD
+    COLUMN IF NOT EXISTS``. When two sessions run it at the same time (e.g. the
+    API server and the scheduler starting together, or a different store instance
+    against the same database) PostgreSQL can raise a transient
+    ``DeadlockDetectedError`` while taking ``AccessExclusiveLock``. A short retry
+    lets exactly one session win; the others then find everything in place and
+    become no-ops.
+    """
+    import asyncpg  # lazy import: only needed for PostgreSQL
+
+    for attempt in range(3):
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(schema)
+            return
+        except asyncpg.exceptions.DeadlockDetectedError:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.2 * (attempt + 1))
+
+
 class PostgresStorage:
     """Durable Storage backed by PostgreSQL via asyncpg."""
 
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._pool: Any = None
+        self._pool_lock = asyncio.Lock()
 
     async def _init_connection(self, conn: Any) -> None:
         # Encode/decode jsonb columns transparently as Python dicts.
@@ -109,11 +135,15 @@ class PostgresStorage:
 
     async def _ensure_pool(self) -> Any:
         if self._pool is None:
-            import asyncpg  # lazy import: only needed for PostgreSQL
+            async with self._pool_lock:
+                if self._pool is None:  # double-checked: only initialize once
+                    import asyncpg  # lazy import: only needed for PostgreSQL
 
-            self._pool = await asyncpg.create_pool(self._dsn, init=self._init_connection)
-            async with self._pool.acquire() as conn:
-                await conn.execute(_SCHEMA)
+                    pool = await asyncpg.create_pool(
+                        self._dsn, init=self._init_connection
+                    )
+                    await _apply_schema(pool, _SCHEMA)
+                    self._pool = pool  # publish only once schema is applied
         return self._pool
 
     async def save_event(self, event: Event) -> None:
@@ -209,14 +239,17 @@ class PostgresSubscriptionStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._pool: Any = None
+        self._pool_lock = asyncio.Lock()
 
     async def _ensure_pool(self) -> Any:
         if self._pool is None:
-            import asyncpg  # lazy import: only needed for PostgreSQL
+            async with self._pool_lock:
+                if self._pool is None:  # double-checked: only initialize once
+                    import asyncpg  # lazy import: only needed for PostgreSQL
 
-            self._pool = await asyncpg.create_pool(self._dsn)
-            async with self._pool.acquire() as conn:
-                await conn.execute(_SUBSCRIPTIONS_SCHEMA)
+                    pool = await asyncpg.create_pool(self._dsn)
+                    await _apply_schema(pool, _SUBSCRIPTIONS_SCHEMA)
+                    self._pool = pool  # publish only once schema is applied
         return self._pool
 
     async def add(self, subscription: Subscription) -> None:
@@ -319,6 +352,7 @@ class PostgresConfigStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._pool: Any = None
+        self._pool_lock = asyncio.Lock()
 
     async def _init_connection(self, conn: Any) -> None:
         # Decode the agent_instructions jsonb column as a Python dict.
@@ -328,11 +362,15 @@ class PostgresConfigStore:
 
     async def _ensure_pool(self) -> Any:
         if self._pool is None:
-            import asyncpg  # lazy import: only needed for PostgreSQL
+            async with self._pool_lock:
+                if self._pool is None:  # double-checked: only initialize once
+                    import asyncpg  # lazy import: only needed for PostgreSQL
 
-            self._pool = await asyncpg.create_pool(self._dsn, init=self._init_connection)
-            async with self._pool.acquire() as conn:
-                await conn.execute(_RUNTIME_CONFIG_SCHEMA)
+                    pool = await asyncpg.create_pool(
+                        self._dsn, init=self._init_connection
+                    )
+                    await _apply_schema(pool, _RUNTIME_CONFIG_SCHEMA)
+                    self._pool = pool  # publish only once schema is applied
         return self._pool
 
     async def get(self) -> RuntimeConfig | None:
@@ -386,14 +424,17 @@ class PostgresCredentialStore:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
         self._pool: Any = None
+        self._pool_lock = asyncio.Lock()
 
     async def _ensure_pool(self) -> Any:
         if self._pool is None:
-            import asyncpg  # lazy import: only needed for PostgreSQL
+            async with self._pool_lock:
+                if self._pool is None:  # double-checked: only initialize once
+                    import asyncpg  # lazy import: only needed for PostgreSQL
 
-            self._pool = await asyncpg.create_pool(self._dsn)
-            async with self._pool.acquire() as conn:
-                await conn.execute(_CREDENTIALS_SCHEMA)
+                    pool = await asyncpg.create_pool(self._dsn)
+                    await _apply_schema(pool, _CREDENTIALS_SCHEMA)
+                    self._pool = pool  # publish only once schema is applied
         return self._pool
 
     async def get(self, provider: str) -> ProviderCredential | None:

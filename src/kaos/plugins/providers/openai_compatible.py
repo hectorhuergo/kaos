@@ -13,12 +13,13 @@ Example (GitHub Models):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from collections.abc import Sequence
 
 import httpx
 
-from kaos.contracts.llm import Message
+from kaos.contracts.llm import LLMError, Message
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 GITHUB_MODELS_BASE_URL = "https://models.inference.ai.azure.com"
@@ -54,6 +55,7 @@ class OpenAICompatibleLLMProvider:
         self._client = client
         self._owns_client = client is None
         self._extra_headers = extra_headers or {}
+        self._current_task: asyncio.Task[str] | None = None
 
     @classmethod
     def github_models(
@@ -146,34 +148,101 @@ class OpenAICompatibleLLMProvider:
         return self._api_key
 
     async def complete(self, messages: Sequence[Message], **options: object) -> str:
-        """Return the model completion, retrying on 429 rate limits."""
-        payload = {
-            "model": self._model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
-            **options,
-        }
-        client = self._get_client()
-        url = f"{self._base_url}/chat/completions"
-        token = await self._auth_token()
-        headers = {"Authorization": f"Bearer {token}", **self._extra_headers}
-        for attempt in range(self._max_retries + 1):
-            response = await client.post(url, json=payload, headers=headers)
-            if response.status_code == _RATE_LIMITED and attempt < self._max_retries:
-                await asyncio.sleep(self._retry_after(response))
-                continue
-            response.raise_for_status()
-            data = response.json()
-            return str(data["choices"][0]["message"]["content"])
-        response.raise_for_status()  # pragma: no cover - safety net
-        return ""
+        """Return the model completion, retrying on 429 rate limits.
+
+        This task can be cancelled via the cancel() method for user-initiated
+        interruption of long-running completions.
+        """
+        # Create and track the completion task so it can be cancelled externally
+        task = asyncio.current_task()
+        old_task = self._current_task
+        if task:
+            self._current_task = task
+
+        try:
+            payload = {
+                "model": self._model,
+                "messages": [{"role": m.role, "content": m.content} for m in messages],
+                **options,
+            }
+            client = self._get_client()
+            url = f"{self._base_url}/chat/completions"
+            token = await self._auth_token()
+            headers = {"Authorization": f"Bearer {token}", **self._extra_headers}
+            try:
+                for attempt in range(self._max_retries + 1):
+                    response = await client.post(url, json=payload, headers=headers)
+                    if (
+                        response.status_code == _RATE_LIMITED
+                        and attempt < self._max_retries
+                    ):
+                        await asyncio.sleep(self._retry_after(response))
+                        continue
+                    if response.is_success:
+                        data = response.json()
+                        return str(data["choices"][0]["message"]["content"])
+                    raise self._error_from(response)  # 4xx/5xx: surface the reason
+                raise self._error_from(response)  # retries exhausted (still 429)
+            except httpx.RequestError as exc:  # transport: DNS, connect, timeout…
+                raise LLMError(
+                    f"No se pudo contactar a {self._name}: {exc}",
+                    provider=self._name,
+                    model=self._model,
+                ) from exc
+        finally:
+            if task and self._current_task == task:
+                self._current_task = old_task
+
+    def _error_from(self, response: httpx.Response) -> LLMError:
+        """Build a clear :class:`LLMError` from a failed provider response.
+
+        Extracts the provider's own error message/code from the JSON body (the
+        OpenAI-style ``{"error": {"code", "message"}}`` shape and a couple of
+        fallbacks) so the UI shows *why* the request failed — e.g. an
+        ``unknown_model`` or a ``tokens_limit_reached`` — instead of a bare
+        ``400``.
+        """
+        return LLMError(
+            f"{self._name} rechazó el pedido ({response.status_code}) para el "
+            f"modelo '{self._model}': {self._error_detail(response)}",
+            provider=self._name,
+            model=self._model,
+            status_code=response.status_code,
+        )
+
+    @staticmethod
+    def _error_detail(response: httpx.Response) -> str:
+        """The most specific human-readable message from an error response body."""
+        try:
+            body = response.json()
+        except ValueError:
+            return response.text[:300].strip() or response.reason_phrase
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                return str(err.get("message") or err.get("code") or err)
+            if isinstance(err, str):
+                return err
+            message = body.get("message")
+            if message:
+                return str(message)
+        return str(body)[:300]
 
     async def list_models(self) -> list[str]:
-        """Return the model ids the endpoint advertises via ``GET /models``.
+        """Return the chat model ids the endpoint advertises via ``GET /models``.
 
-        Best-effort discovery for the console's model selector. Parses the
-        OpenAI-style ``{"data": [{"id": ...}]}`` shape and a couple of common
-        fallbacks. Raises on transport/HTTP errors so the caller can decide to
-        fall back to a free-text field.
+        Handles the shapes seen in the wild:
+
+        - OpenAI / Ollama: ``{"data": [{"id": "gpt-4o"}]}`` — ``id`` *is* the model.
+        - GitHub Models (Azure inference host): a top-level list where each ``id``
+          is an ``azureml://…/models/<name>/versions/<n>`` **resource URI**, so the
+          usable model is the ``name`` field (e.g. ``gpt-4o``), not the URI (whose
+          last path segment is just the version number). Non-chat entries (e.g.
+          embeddings) are filtered out via ``task`` so the selector only offers
+          chat models.
+
+        Best-effort discovery for the console's model selector. Raises on
+        transport/HTTP errors so the caller can fall back to a free-text field.
         """
         client = self._get_client()
         url = f"{self._base_url}/models"
@@ -187,10 +256,31 @@ class OpenAICompatibleLLMProvider:
             return []
         models: list[str] = []
         for row in rows:
-            ident = row.get("id") or row.get("name") if isinstance(row, dict) else row
+            if not isinstance(row, dict):
+                if row:
+                    models.append(str(row).strip())
+                continue
+            task = str(row.get("task") or "").lower()
+            if task and "chat" not in task and "completion" not in task:
+                continue  # skip embeddings and other non-chat models
+            ident = self._model_ident(row)
             if ident:
-                models.append(str(ident))
+                models.append(ident)
         return sorted(dict.fromkeys(models))
+
+    @staticmethod
+    def _model_ident(row: dict[str, object]) -> str:
+        """The inference model id from a catalog row.
+
+        Prefer a plain ``id`` (OpenAI/Ollama ids, and the GitHub-native catalog's
+        ``publisher/model``); when ``id`` is a resource URI — e.g. Azure's
+        ``azureml://…/versions/3`` — fall back to the model ``name`` so we never
+        surface a bare version number.
+        """
+        ident = str(row.get("id") or "").strip()
+        if ident and "://" not in ident:
+            return ident
+        return str(row.get("name") or row.get("friendly_name") or "").strip()
 
     @staticmethod
     def _retry_after(response: httpx.Response) -> float:
@@ -208,7 +298,17 @@ class OpenAICompatibleLLMProvider:
 
     async def aclose(self) -> None:
         """Close the underlying client if this provider created it."""
+        # Cancel any pending completion request
+        await self.cancel()
         if self._client is not None and self._owns_client:
             await self._client.aclose()
             self._client = None
+
+    async def cancel(self) -> None:
+        """Cancel the currently running completion request, if any."""
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._current_task
+
 

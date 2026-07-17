@@ -134,6 +134,70 @@ def test_api_chat_send_persists_turns_and_sessions() -> None:
     assert sessions[0]["agent_id"] == "resume-agent"
 
 
+def test_api_chat_cancel_without_active_task_returns_false() -> None:
+    storage = InMemoryStorage()
+    client = TestClient(create_app(Settings(), storage=storage))
+    resp = client.post(
+        "/api/chat/cancel", json={"workspace": WS, "session_id": "nope"}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"cancelled": False}
+
+
+def test_api_chat_send_surfaces_llm_error_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider error (e.g. unknown model) is shown with its reason, not a 500."""
+    from kaos.contracts.llm import LLMError
+
+    storage = InMemoryStorage()
+    client = TestClient(create_app(Settings(), storage=storage))
+
+    async def boom(*args: object, **kwargs: object) -> dict[str, object]:
+        raise LLMError(
+            "github-models rechazó el pedido (400) para el modelo "
+            "'Meta-Llama-3.1-8B-Instruct': Unknown model: meta-llama-3.1-8b-instruct",
+            provider="github-models",
+            model="Meta-Llama-3.1-8B-Instruct",
+            status_code=400,
+        )
+
+    monkeypatch.setattr("kaos.plugins.dashboard.app.send_message", boom)
+    resp = client.post(
+        "/api/chat/send",
+        json={
+            "workspace": WS,
+            "user_id": "ana",
+            "agent_id": "resume-agent",
+            "message": "hola",
+        },
+    )
+    # An upstream 4xx passes through (not a 500), with the provider's reason.
+    assert resp.status_code == 400
+    assert "Unknown model" in resp.json()["detail"]
+
+
+def test_chat_manager_cancels_in_flight_task() -> None:
+    from kaos.plugins.dashboard.chat_manager import ChatSessionManager
+
+    async def scenario() -> bool:
+        manager = ChatSessionManager()
+        started = asyncio.Event()
+
+        async def slow() -> str:
+            started.set()
+            await asyncio.sleep(30)
+            return "done"
+
+        task: asyncio.Task[str] = asyncio.ensure_future(slow())
+        manager.register_task(WS, "s1", task)
+        await started.wait()
+        cancelled = await manager.cancel_task(WS, "s1")
+        # A second cancel finds no active task (it was cleaned up).
+        assert await manager.cancel_task(WS, "s1") is False
+        return cancelled
+
+    assert asyncio.run(scenario()) is True
+
+
 def test_api_chat_thread_and_aggregated_sessions() -> None:
     from kaos.domain.subscription import Subscription
     from kaos.runtime import InMemorySubscriptionStore

@@ -1,6 +1,43 @@
 # Changelog
 
 ## Unreleased
+- LLM: raised the default request timeout to 300s (`KAOS_LLM_TIMEOUT`) so slower
+  reasoning/large models have room to answer before timing out.
+- LLM errors: providers now raise a clear `LLMError` (new, in `kaos.contracts.llm`)
+  carrying the provider's own reason, the model and the upstream status, instead of a
+  raw `httpx.HTTPStatusError`. `OpenAICompatibleLLMProvider.complete` parses the error
+  body (OpenAI-style `{"error": {"code","message"}}`) and wraps transport failures too.
+  The chat endpoint maps it to the upstream 4xx (or 502) with the message as `detail`,
+  and the console shows a "⚠ No se pudo generar la respuesta" bubble with the reason
+  (dropping the pending spinner). Fixes the opaque `500` when picking a model the GitHub
+  Models legacy host *lists* but its inference endpoint rejects (e.g. Meta-Llama →
+  `400 unknown_model`).
+- PostgreSQL: fixed a **schema-init deadlock** on concurrent first use. Each store's
+  `_ensure_pool` was unguarded, so two requests arriving together (the console loads
+  several panels at once) both created a pool and ran the schema DDL on separate
+  connections, deadlocking on `AccessExclusiveLock` (and leaking a pool) — a 500 that
+  surfaced mainly with slower providers like GitHub Models, whose network latency widens
+  the race window. Initialization is now serialized with an `asyncio.Lock`
+  (double-checked, publishing the pool only after the schema is applied), and the DDL is
+  wrapped in a short deadlock retry (`_apply_schema`) to also cover multi-instance races
+  (e.g. API server + scheduler starting together). Applies to storage, subscriptions,
+  runtime-config and credential stores.
+- Chat: **cancelar** una generación en curso. `POST /api/chat/send` corre como una
+  tarea rastreada por `(workspace, session_id)` en un `ChatSessionManager`; cancelarla
+  propaga por `await llm.complete(...)` y aborta la request HTTP al proveedor (devuelve
+  `499`). Nuevo `POST /api/chat/cancel`. La consola genera el `session_id` en el cliente
+  (así se puede cancelar incluso el primer turno), muestra un botón **⏹ Cancelar**
+  mientras genera y renderiza "generación cancelada" en vez de un error.
+- Chat: **previsualización de Markdown** en las burbujas del asistente vía `markdown-it`
+  + `DOMPurify` cargados por CDN (mismo patrón que Mermaid en el dashboard), con
+  degradación a texto plano escapado cuando no hay red. Estilos para código, listas,
+  tablas, citas y encabezados dentro de la burbuja.
+- GitHub Models: corregido el listado de modelos (`OpenAICompatibleLLMProvider.list_models`).
+  El endpoint `GET https://models.inference.ai.azure.com/models` devuelve `id` como URI de
+  recurso `azureml://…/models/<name>/versions/<n>`; el parser anterior tomaba el último
+  segmento y exponía el **número de versión** (1, 2, 3). Ahora usa el campo `name` cuando el
+  `id` es un URI y filtra los modelos que no son de chat (embeddings) del selector; los `id`
+  planos de OpenAI/Ollama quedan intactos.
 - Per-subscription agent selection: choose which agent processes a subscription in
   **Ejecutar** (per-run override) and **Suscripciones** (persistent, so the scheduler
   and `kaos run` honor it), plus **Vista previa**. `Subscription` gains a nullable
