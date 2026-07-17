@@ -69,6 +69,7 @@ from kaos.plugins.dashboard.chat import (
     session_thread,
 )
 from kaos.plugins.dashboard.chat_manager import get_chat_manager
+from kaos.plugins.dashboard.run_manager import get_run_manager
 from kaos.plugins.dashboard.console import render_console
 from kaos.plugins.dashboard.directory import (
     resolve_header,
@@ -115,6 +116,7 @@ class GitHubPreviewInput(BaseModel):
     """Request body: a GitHub repo to preview (dry-run, no publish)."""
 
     repo: str
+    run_id: str = ""
     limit: int = 30
     extra_instructions: str = ""
     llm_provider: str | None = None
@@ -126,6 +128,7 @@ class SubscriptionPreviewInput(BaseModel):
     """Request body: a subscription to preview (dry-run, no publish)."""
 
     channel_id: str
+    run_id: str = ""
     extra_instructions: str = ""
     llm_provider: str | None = None
     llm_model: str | None = None
@@ -136,6 +139,7 @@ class SubscriptionRunInput(BaseModel):
     """Request body: a subscription to run for real (persist + cache)."""
 
     channel_id: str
+    run_id: str = ""
     force: bool = False
     publish: bool = False
     extra_instructions: str = ""
@@ -147,9 +151,16 @@ class SubscriptionRunInput(BaseModel):
 class RunAllInput(BaseModel):
     """Request body: run every active subscription (persist + cache)."""
 
+    run_id: str = ""
     force: bool = False
     publish: bool = False
     extra_instructions: str = ""
+
+
+class RunCancelInput(BaseModel):
+    """Request body: cancel an in-flight preview/run operation."""
+
+    run_id: str
 
 
 class SubscriptionInput(BaseModel):
@@ -759,7 +770,7 @@ def create_app(
     async def api_preview_github(
         body: GitHubPreviewInput = Body(...),
     ) -> dict[str, Any]:
-        try:
+        async def _do_preview() -> dict[str, Any]:
             artifacts = await preview_github(
                 cfg, body.repo, limit=body.limit,
                 extra_instructions=await _effective_instructions(
@@ -769,15 +780,23 @@ def create_app(
                 llm_model=body.llm_model,
                 agent_id=body.agent_id,
             )
+            return {"published": False, "artifacts": artifacts_to_dicts(artifacts)}
+
+        task = asyncio.create_task(_do_preview())
+        if body.run_id:
+            get_run_manager().register_task(body.run_id, task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise HTTPException(status_code=499, detail="cancelado por el usuario") from None
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"published": False, "artifacts": artifacts_to_dicts(artifacts)}
 
     @app.post("/api/preview/subscription")
     async def api_preview_subscription(
         body: SubscriptionPreviewInput = Body(...),
     ) -> dict[str, Any]:
-        try:
+        async def _do_preview() -> dict[str, Any]:
             artifacts = await preview_subscription(
                 cfg, body.channel_id, subscription_store=_subs(),
                 extra_instructions=await _effective_instructions(
@@ -788,9 +807,17 @@ def create_app(
                 llm_model=body.llm_model,
                 agent_id=body.agent_id,
             )
+            return {"published": False, "artifacts": artifacts_to_dicts(artifacts)}
+
+        task = asyncio.create_task(_do_preview())
+        if body.run_id:
+            get_run_manager().register_task(body.run_id, task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise HTTPException(status_code=499, detail="cancelado por el usuario") from None
         except PreviewError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"published": False, "artifacts": artifacts_to_dicts(artifacts)}
 
     # ---- Interactive run (persist + populate cache; does NOT publish) ----
 
@@ -798,7 +825,7 @@ def create_app(
     async def api_run_subscription(
         body: SubscriptionRunInput = Body(...),
     ) -> dict[str, Any]:
-        try:
+        async def _do_run() -> dict[str, Any]:
             artifacts = await run_subscription(
                 cfg,
                 body.channel_id,
@@ -813,17 +840,25 @@ def create_app(
                 llm_model=body.llm_model,
                 agent_id=body.agent_id,
             )
+            return {
+                "persisted": True,
+                "published": body.publish,
+                "artifacts": artifacts_to_dicts(artifacts),
+            }
+
+        task = asyncio.create_task(_do_run())
+        if body.run_id:
+            get_run_manager().register_task(body.run_id, task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise HTTPException(status_code=499, detail="cancelado por el usuario") from None
         except RunError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {
-            "persisted": True,
-            "published": body.publish,
-            "artifacts": artifacts_to_dicts(artifacts),
-        }
 
     @app.post("/api/run/all")
     async def api_run_all(body: RunAllInput = Body(...)) -> dict[str, Any]:
-        try:
+        async def _do_run_all() -> dict[str, Any]:
             artifacts = await run_all(
                 cfg,
                 subscription_store=_subs(),
@@ -831,13 +866,26 @@ def create_app(
                 publish=body.publish,
                 extra_instructions=await _effective_instructions(body.extra_instructions),
             )
+            return {
+                "persisted": True,
+                "published": body.publish,
+                "artifacts": artifacts_to_dicts(artifacts),
+            }
+
+        task = asyncio.create_task(_do_run_all())
+        if body.run_id:
+            get_run_manager().register_task(body.run_id, task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise HTTPException(status_code=499, detail="cancelado por el usuario") from None
         except RunError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {
-            "persisted": True,
-            "published": body.publish,
-            "artifacts": artifacts_to_dicts(artifacts),
-        }
+
+    @app.post("/api/run/cancel")
+    async def api_run_cancel(body: RunCancelInput = Body(...)) -> dict[str, bool]:
+        cancelled = get_run_manager().cancel_task(body.run_id)
+        return {"cancelled": cancelled}
 
     return app
 

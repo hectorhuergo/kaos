@@ -470,19 +470,28 @@ let DASH_SUBS = {};
 let RUN_MODAL_CHANNEL = '';
 let DASH_BUSY = false;
 let DASH_ABORT_CTRL = null;
+let DASH_RUN_ID = null;
 function setDashBusy(busy){
   DASH_BUSY = busy;
-  if(busy){ DASH_ABORT_CTRL = new AbortController(); }
-  else { DASH_ABORT_CTRL = null; }
+  if(busy){
+    DASH_ABORT_CTRL = new AbortController();
+    DASH_RUN_ID = 'dash-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+  } else {
+    DASH_ABORT_CTRL = null;
+    DASH_RUN_ID = null;
+  }
   const cancel = $('#dash-cancel');
   if(cancel){ cancel.style.display = busy ? '' : 'none'; cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; }
   $$('#tab-dashboards button.act:not(#dash-cancel)').forEach(b => b.disabled = busy);
 }
-function cancelDash(){
-  if(!DASH_BUSY || !DASH_ABORT_CTRL) return;
+async function cancelDash(){
+  if(!DASH_BUSY) return;
   const cancel = $('#dash-cancel');
   if(cancel){ cancel.disabled = true; cancel.textContent = 'Cancelando…'; }
-  DASH_ABORT_CTRL.abort();
+  if(DASH_ABORT_CTRL) DASH_ABORT_CTRL.abort();
+  if(DASH_RUN_ID){
+    try{ await fetch('/api/run/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({run_id:DASH_RUN_ID})}); }catch(e){}
+  }
   toast('Operación cancelada');
 }
 async function loadDashboards(){
@@ -555,7 +564,7 @@ async function confirmRunModal(){
   try{
     const signal = DASH_ABORT_CTRL ? DASH_ABORT_CTRL.signal : undefined;
     const data = await api('/api/run/subscription', {method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify(Object.assign({channel_id: channelId, force:false, publish}, override)), signal});
+      body: JSON.stringify(Object.assign({channel_id: channelId, run_id: DASH_RUN_ID, force:false, publish}, override)), signal});
     dashRenderOut(data, publish
       ? '✔ persistido · cache actualizada · publicado en Discord'
       : '✔ persistido · cache actualizada · no se publicó');
@@ -1093,22 +1102,31 @@ async function cancelChat(){
   finally{ if(cancel){ cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; } }
 }
 
-// ---- Preview/Run cancellation (abort HTTP request) ----
+// ---- Preview/Run cancellation ----
 let PV_BUSY = false;
 let PV_ABORT_CTRL = null;
+let PV_RUN_ID = null;
 function setPvBusy(busy){
   PV_BUSY = busy;
-  if(busy){ PV_ABORT_CTRL = new AbortController(); }
-  else { PV_ABORT_CTRL = null; }
+  if(busy){
+    PV_ABORT_CTRL = new AbortController();
+    PV_RUN_ID = 'pv-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+  } else {
+    PV_ABORT_CTRL = null;
+    PV_RUN_ID = null;
+  }
   const cancel = $('#pv-cancel');
   if(cancel){ cancel.style.display = busy ? '' : 'none'; cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; }
   $$('#tab-preview button.act:not(#pv-cancel)').forEach(b => b.disabled = busy);
 }
-function cancelPreview(){
-  if(!PV_BUSY || !PV_ABORT_CTRL) return;
+async function cancelPreview(){
+  if(!PV_BUSY) return;
   const cancel = $('#pv-cancel');
   if(cancel){ cancel.disabled = true; cancel.textContent = 'Cancelando…'; }
-  PV_ABORT_CTRL.abort();
+  if(PV_ABORT_CTRL) PV_ABORT_CTRL.abort();
+  if(PV_RUN_ID){
+    try{ await fetch('/api/run/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({run_id:PV_RUN_ID})}); }catch(e){}
+  }
   toast('Operación cancelada');
 }
 
@@ -1162,6 +1180,12 @@ function renderPreview(data){
 async function runPreview(url, opts){
   if(PV_BUSY){ toast('Ya hay una operación en curso', false); return; }
   setPvBusy(true);
+  // Inject run_id into body
+  if(opts.body){
+    const parsed = JSON.parse(opts.body);
+    parsed.run_id = PV_RUN_ID;
+    opts.body = JSON.stringify(parsed);
+  }
   const out = $('#pv-out');
   out.innerHTML = '<p class="spin">⏳ Resumiendo… (esto puede tardar según el modelo; no se publica nada)</p>';
   try{
@@ -1199,6 +1223,7 @@ function runAll(){
 async function execRun(path, body){
   if(PV_BUSY){ toast('Ya hay una operación en curso', false); return; }
   setPvBusy(true);
+  body.run_id = PV_RUN_ID;
   const out = $('#pv-out');
   const verb = body.publish ? 'Ejecutando y publicando' : 'Ejecutando';
   out.innerHTML = `<p class="spin">⏳ ${verb}… genera resúmenes y llena la cache${body.publish?' y publica en Discord':' (no publica)'}</p>`;
