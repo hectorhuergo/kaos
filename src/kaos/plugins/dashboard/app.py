@@ -61,6 +61,7 @@ from kaos.domain.runtime_config import RuntimeConfig
 from kaos.domain.subscription import GITHUB, KINDS, Subscription
 from kaos.plugins.agents.dev_agent import BASE_PROMPT as DEV_BASE_PROMPT
 from kaos.plugins.agents.resume_agent import SYSTEM_PROMPT as RESUME_BASE_PROMPT
+from kaos.plugins.agents.task_agent import SYSTEM_PROMPT as TASK_BASE_PROMPT
 from kaos.plugins.dashboard import render_dashboard
 from kaos.plugins.dashboard.chat import (
     artifact_thread,
@@ -94,6 +95,7 @@ from kaos.plugins.dashboard.service import (
 AGENT_BASE_PROMPTS: dict[str, str] = {
     "resume-agent": RESUME_BASE_PROMPT,
     "dev-agent": DEV_BASE_PROMPT,
+    "task-agent": TASK_BASE_PROMPT,
 }
 
 

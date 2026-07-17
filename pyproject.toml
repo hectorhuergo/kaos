@@ -63,6 +63,8 @@ extend-immutable-calls=["fastapi.Body", "fastapi.Query", "fastapi.Depends"]
 # Embedded frontend assets (HTML/CSS/JS strings) legitimately exceed the limit.
 "src/kaos/plugins/dashboard/console.py"=["E501"]
 "src/kaos/plugins/dashboard/__init__.py"=["E501"]
+# Agent prompts are long text; reasonable to keep together.
+"src/kaos/plugins/agents/task_agent.py"=["E501"]
 # Tests favour readable, unwrapped assertions/fixtures.
 "tests/*"=["E501"]
 

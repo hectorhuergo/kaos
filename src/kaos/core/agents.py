@@ -50,6 +50,17 @@ AGENT_CATALOG: tuple[AgentInfo, ...] = (
         trigger="tarea (kaos dev / evento dev.task)",
         augmentable=True,
     ),
+    AgentInfo(
+        id="task-agent",
+        label="Task Agent",
+        description=(
+            "Consolida múltiples hilos en un reporte ejecutivo unificado con "
+            "cronología, plan de acción y horas estimadas."
+        ),
+        produces="task.report",
+        trigger="evento task.consolidate",
+        augmentable=True,
+    ),
 )
 
 
