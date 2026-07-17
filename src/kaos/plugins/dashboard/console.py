@@ -468,6 +468,23 @@ let DASH_WS_CHANNEL = {};
 let DASH_WS_PUBLISH = {};
 let DASH_SUBS = {};
 let RUN_MODAL_CHANNEL = '';
+let DASH_BUSY = false;
+let DASH_ABORT_CTRL = null;
+function setDashBusy(busy){
+  DASH_BUSY = busy;
+  if(busy){ DASH_ABORT_CTRL = new AbortController(); }
+  else { DASH_ABORT_CTRL = null; }
+  const cancel = $('#dash-cancel');
+  if(cancel){ cancel.style.display = busy ? '' : 'none'; cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; }
+  $$('#tab-dashboards button.act:not(#dash-cancel)').forEach(b => b.disabled = busy);
+}
+function cancelDash(){
+  if(!DASH_BUSY || !DASH_ABORT_CTRL) return;
+  const cancel = $('#dash-cancel');
+  if(cancel){ cancel.disabled = true; cancel.textContent = 'Cancelando…'; }
+  DASH_ABORT_CTRL.abort();
+  toast('Operación cancelada');
+}
 async function loadDashboards(){
   const box = $('#dashboards'); box.innerHTML = '<p class="muted">Cargando…</p>';
   try{
@@ -524,6 +541,7 @@ function closeRunModal(){ $('#run-modal').style.display = 'none'; RUN_MODAL_CHAN
 async function confirmRunModal(){
   const channelId = RUN_MODAL_CHANNEL;
   if(!channelId) return;
+  if(DASH_BUSY){ toast('Ya hay una operación en curso', false); return; }
   const publish = $('#run-publish').checked;
   const override = {
     llm_provider: $('#run-llm-provider') ? ($('#run-llm-provider').value || null) : null,
@@ -531,17 +549,22 @@ async function confirmRunModal(){
     agent_id: $('#run-agent') ? ($('#run-agent').value || null) : null,
   };
   closeRunModal();
+  setDashBusy(true);
   const out = $('#dash-out');
   out.innerHTML = `<p class="spin">⏳ Ejecutando… (persiste + cache${publish?' y publica en Discord':', no publica'})</p>`;
   try{
+    const signal = DASH_ABORT_CTRL ? DASH_ABORT_CTRL.signal : undefined;
     const data = await api('/api/run/subscription', {method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify(Object.assign({channel_id: channelId, force:false, publish}, override))});
+      body: JSON.stringify(Object.assign({channel_id: channelId, force:false, publish}, override)), signal});
     dashRenderOut(data, publish
       ? '✔ persistido · cache actualizada · publicado en Discord'
       : '✔ persistido · cache actualizada · no se publicó');
     toast('Corrida completa');
     loadDashboards();
-  }catch(e){ out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }catch(e){
+    if(e.name === 'AbortError'){ out.innerHTML = '<p class="muted">Operación cancelada.</p>'; }
+    else { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }finally{ setDashBusy(false); }
 }
 
 // Friendly agent names (id -> label), filled from /api/agents when tabs load.
@@ -1070,6 +1093,25 @@ async function cancelChat(){
   finally{ if(cancel){ cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; } }
 }
 
+// ---- Preview/Run cancellation (abort HTTP request) ----
+let PV_BUSY = false;
+let PV_ABORT_CTRL = null;
+function setPvBusy(busy){
+  PV_BUSY = busy;
+  if(busy){ PV_ABORT_CTRL = new AbortController(); }
+  else { PV_ABORT_CTRL = null; }
+  const cancel = $('#pv-cancel');
+  if(cancel){ cancel.style.display = busy ? '' : 'none'; cancel.disabled = false; cancel.textContent = '⏹ Cancelar'; }
+  $$('#tab-preview button.act:not(#pv-cancel)').forEach(b => b.disabled = busy);
+}
+function cancelPreview(){
+  if(!PV_BUSY || !PV_ABORT_CTRL) return;
+  const cancel = $('#pv-cancel');
+  if(cancel){ cancel.disabled = true; cancel.textContent = 'Cancelando…'; }
+  PV_ABORT_CTRL.abort();
+  toast('Operación cancelada');
+}
+
 // ---- Preview (dry-run: summarize without publishing) ----
 function esc(s){ return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 // Render Markdown to sanitized HTML for chat bubbles. Falls back to escaped
@@ -1117,11 +1159,19 @@ function renderPreview(data){
         + `<pre class="out">${esc(summary)}</pre>`;
     }).join('');
 }
-async function runPreview(promise){
+async function runPreview(url, opts){
+  if(PV_BUSY){ toast('Ya hay una operación en curso', false); return; }
+  setPvBusy(true);
   const out = $('#pv-out');
   out.innerHTML = '<p class="spin">⏳ Resumiendo… (esto puede tardar según el modelo; no se publica nada)</p>';
-  try{ renderPreview(await promise); }
-  catch(e){ out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  try{
+    const signal = PV_ABORT_CTRL ? PV_ABORT_CTRL.signal : undefined;
+    const data = await api(url, {...opts, signal});
+    renderPreview(data);
+  }catch(e){
+    if(e.name === 'AbortError'){ out.innerHTML = '<p class="muted">Operación cancelada.</p>'; }
+    else { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }finally{ setPvBusy(false); }
 }
 function pvOverride(){
   return {
@@ -1133,8 +1183,8 @@ function pvOverride(){
 function previewSubscription(){
   const channel_id = $('#pv-sub').value;
   if(!channel_id){ toast('No hay suscripción para previsualizar', false); return; }
-  runPreview(api('/api/preview/subscription', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify(Object.assign({channel_id, extra_instructions: agentExtra()}, pvOverride()))}));
+  runPreview('/api/preview/subscription', {method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify(Object.assign({channel_id, extra_instructions: agentExtra()}, pvOverride()))});
 }
 function runSubscription(){
   const channel_id = $('#pv-sub').value;
@@ -1146,26 +1196,31 @@ function runAll(){
   const body = {force: $('#pv-force').checked, publish: $('#pv-publish').checked, extra_instructions: agentExtra()};
   execRun('/api/run/all', body);
 }
-function execRun(path, body){
+async function execRun(path, body){
+  if(PV_BUSY){ toast('Ya hay una operación en curso', false); return; }
+  setPvBusy(true);
   const out = $('#pv-out');
   const verb = body.publish ? 'Ejecutando y publicando' : 'Ejecutando';
   out.innerHTML = `<p class="spin">⏳ ${verb}… genera resúmenes y llena la cache${body.publish?' y publica en Discord':' (no publica)'}</p>`;
-  api(path, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)})
-    .then(data => {
-      renderPreview(data);
-      const note = data.published ? '✔ persistido · cache actualizada · publicado en Discord'
-                                  : '✔ persistido · cache actualizada · no se publicó';
-      out.innerHTML = `<div class="pill ok" style="margin-bottom:.6rem">${note}</div>` + out.innerHTML;
-      toast('Corrida completa');
-    })
-    .catch(e => { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; });
+  try{
+    const signal = PV_ABORT_CTRL ? PV_ABORT_CTRL.signal : undefined;
+    const data = await api(path, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body), signal});
+    renderPreview(data);
+    const note = data.published ? '✔ persistido · cache actualizada · publicado en Discord'
+                                : '✔ persistido · cache actualizada · no se publicó';
+    out.innerHTML = `<div class="pill ok" style="margin-bottom:.6rem">${note}</div>` + out.innerHTML;
+    toast('Corrida completa');
+  }catch(e){
+    if(e.name === 'AbortError'){ out.innerHTML = '<p class="muted">Operación cancelada.</p>'; }
+    else { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }finally{ setPvBusy(false); }
 }
 function previewGithub(){
   const repo = $('#pv-repo').value.trim();
   if(!repo){ toast('Escribí owner/repo', false); return; }
   const limit = parseInt($('#pv-limit').value, 10) || 30;
-  runPreview(api('/api/preview/github', {method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify(Object.assign({repo, limit, extra_instructions: agentExtra()}, pvOverride()))}));
+  runPreview('/api/preview/github', {method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify(Object.assign({repo, limit, extra_instructions: agentExtra()}, pvOverride()))});
 }
 
 function toggleNav(){
@@ -1342,7 +1397,7 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
       <div class="grid">
         <div><label for="pv-sub">Suscripción</label>
           <select id="pv-sub"></select></div>
-        <div style="display:flex;align-items:flex-end;gap:.6rem;flex-wrap:wrap">
+        <div id="pv-buttons" style="display:flex;align-items:flex-end;gap:.6rem;flex-wrap:wrap">
           <button class="act ghost" onclick="previewSubscription()">Previsualizar (no persiste)</button>
           <button class="act" onclick="runSubscription()">Ejecutar (persistir + cache)</button>
           <button class="act ghost" onclick="runAll()">Ejecutar todas</button>
@@ -1378,6 +1433,9 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
         <button class="act" onclick="previewGithub()">Previsualizar repo</button>
       </div>
     </div>
+    <div style="margin-top:.8rem;display:flex;gap:.6rem;align-items:center">
+      <button class="act ghost" id="pv-cancel" onclick="cancelPreview()" style="display:none">⏹ Cancelar</button>
+    </div>
     <div id="pv-out"></div>
   </section>
 
@@ -1386,6 +1444,9 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
     <p class="muted">Cada workspace muestra sus KPIs. <strong>Ejecutar</strong> persiste y actualiza la cache de
       conocimiento; marcá <strong>Publicar</strong> (refleja el estado de la suscripción) para además enviarlo a Discord.</p>
     <div id="dashboards"></div>
+    <div style="margin-top:.8rem;display:flex;gap:.6rem;align-items:center">
+      <button class="act ghost" id="dash-cancel" onclick="cancelDash()" style="display:none">⏹ Cancelar</button>
+    </div>
     <div id="dash-out" style="margin-top:1rem"></div>
   </section>
 </main>

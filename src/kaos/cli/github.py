@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import httpx
 
-from kaos.bootstrap.factory import build_llm, build_publisher, build_storage, load_settings
+from kaos.bootstrap.factory import (
+    build_credential_store,
+    build_llm,
+    build_publisher,
+    build_storage,
+    load_settings,
+)
 from kaos.contracts.publisher import Publisher
 from kaos.core.config import Settings
 from kaos.plugins.agents import ResumeAgent
@@ -18,6 +24,23 @@ from kaos.plugins.connectors import GitHubConnector, GitHubRestSource
 from kaos.plugins.dashboard.chat import load_contributions
 from kaos.plugins.publishers import ConsolePublisher
 from kaos.runtime import InMemoryStorage, KaosRuntime
+
+
+async def _resolve_github_token(settings: Settings) -> str | None:
+    """Resolve the GitHub token: credential store wins over env."""
+    # Credential store (edited from console) takes precedence over env.
+    if settings.database_url:
+        store = build_credential_store(settings)
+        try:
+            cred = await store.get("github")
+            if cred and cred.api_key:
+                return cred.api_key
+        finally:
+            close = getattr(store, "close", None)
+            if close:
+                await close()
+    # Fallback to env.
+    return settings.github_token or settings.llm_api_key
 
 
 async def run_github(
@@ -48,7 +71,7 @@ async def run_github(
     if not target:
         print("error: falta el repositorio (argumento <owner/repo> o KAOS_GITHUB_REPO)")
         return 1
-    token = settings.github_token or settings.llm_api_key
+    token = await _resolve_github_token(settings)
     if not token:
         print("error: KAOS_GITHUB_TOKEN es necesario para leer GitHub")
         return 1

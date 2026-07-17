@@ -19,6 +19,7 @@ Set-Location $Root
 
 $Compose = @('compose', '-f', 'docker/docker-compose.yml')
 $DockerDesktop = 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+$Docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
 $env:KAOS_DATABASE_URL = 'postgresql://kaos:kaos@localhost:5432/kaos'
 
 function Resolve-Python {
@@ -31,41 +32,57 @@ function Resolve-Python {
     throw 'No encuentro Python. Creá .venv o instalá Python 3.13.'
 }
 
+function Test-DockerReady {
+    $ErrorActionPreference = 'SilentlyContinue'
+    $null = & $Docker info 2>&1
+    return $LASTEXITCODE -eq 0
+}
+
 function Wait-Docker {
-    docker info *> $null
-    if ($LASTEXITCODE -eq 0) { return }
+    if (Test-DockerReady) { return }
 
     if (-not (Test-Path $DockerDesktop)) {
         throw "Docker Engine no responde y Docker Desktop no existe en: $DockerDesktop"
     }
 
     Write-Host 'Iniciando Docker Desktop...' -ForegroundColor Cyan
-    Start-Process $DockerDesktop
+    Start-Process -FilePath $DockerDesktop
 
-    for ($i = 0; $i -lt 60; $i++) {
-        Start-Sleep -Seconds 2
-        docker info *> $null
-        if ($LASTEXITCODE -eq 0) {
+    $timeout = 120
+    $elapsed = 0
+    $interval = 5
+
+    while ($elapsed -lt $timeout) {
+        Start-Sleep -Seconds $interval
+        $elapsed += $interval
+        if (Test-DockerReady) {
             Write-Host 'Docker Engine listo.' -ForegroundColor Green
             return
         }
+        Write-Host "  Esperando Docker Engine... ($elapsed/$timeout s)" -ForegroundColor DarkGray
     }
 
-    throw 'Docker Desktop se inició, pero Docker Engine no quedó disponible a tiempo.'
+    throw 'Docker Desktop se inició, pero Docker Engine no quedó disponible en 2 minutos.'
 }
 
 function Wait-Postgres {
     Write-Host 'Levantando PostgreSQL...' -ForegroundColor Cyan
-    docker @Compose up -d postgres | Out-Null
+    $ErrorActionPreference = 'SilentlyContinue'
+    $null = & $Docker @Compose up -d postgres 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo iniciar PostgreSQL.' }
 
-    for ($i = 0; $i -lt 40; $i++) {
-        docker @Compose exec -T postgres pg_isready -U kaos -d kaos *> $null
+    $timeout = 60
+    $elapsed = 0
+    $interval = 5
+
+    while ($elapsed -lt $timeout) {
+        $null = & $Docker @Compose exec -T postgres pg_isready -U kaos -d kaos 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Host 'PostgreSQL listo.' -ForegroundColor Green
             return
         }
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds $interval
+        $elapsed += $interval
     }
 
     throw 'PostgreSQL no quedó listo a tiempo.'
@@ -97,7 +114,9 @@ Wait-Postgres
 
 if (-not $NoOllama) {
     Write-Host 'Levantando Ollama...' -ForegroundColor Cyan
-    docker @Compose up -d ollama
+    $ErrorActionPreference = 'SilentlyContinue'
+    $null = & $Docker @Compose up -d ollama 2>&1
+    $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo iniciar Ollama.' }
     Write-Host 'Ollama iniciado en http://localhost:11434.' -ForegroundColor Green
 }
