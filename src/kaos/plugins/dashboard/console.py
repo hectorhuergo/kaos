@@ -123,14 +123,14 @@ pre.out{white-space:pre-wrap;word-wrap:break-word;background:#0f1115;border:1px 
 .bubble .md li{margin:.15rem 0}
 .bubble .md a{color:#7aa2ff}
 .bubble .md code{background:#0f1115;border:1px solid #262b36;border-radius:5px;padding:.05rem .3rem;font-size:.85em}
-.bubble .md pre{background:#0f1115;border:1px solid #262b36;border-radius:8px;padding:.6rem .7rem;overflow:auto;margin:.4rem 0}
+.bubble .md pre{background:#0f1115;border:1px solid #262b36;border-radius:8px;padding:.6rem .7rem;overflow:auto;margin:.4rem 0;max-width:100%}
 .bubble .md pre code{background:none;border:none;padding:0}
 .bubble .md blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid #2f3646;color:#b9c1cd}
-.bubble .md table{border-collapse:collapse;margin:.4rem 0;font-size:.85em}
+.bubble .md table{border-collapse:collapse;margin:.4rem 0;font-size:.85em;overflow-x:auto;display:block}
 .bubble .md th,.bubble .md td{border:1px solid #2f3646;padding:.25rem .5rem}
 .bubble .md hr{border:none;border-top:1px solid #262b36;margin:.6rem 0}
-.chat-composer{margin-top:.8rem;background:#161a22;border:1px solid #262b36;border-radius:10px;padding:.8rem}
-@media(max-width:820px){.chat-layout{grid-template-columns:1fr}.chat-side{position:static;max-height:none}}
+.chat-composer{margin-top:.8rem;background:#161a22;border:1px solid #262b36;border-radius:10px;padding:.8rem;overflow-x:hidden}
+@media(max-width:820px){.chat-layout{grid-template-columns:1fr}.chat-side{position:static;max-height:none}.chat-thread{max-width:100vw}}
 """
 
 _SCRIPT = """
