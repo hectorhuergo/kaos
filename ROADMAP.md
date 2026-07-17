@@ -37,6 +37,7 @@
 - [ ] Consola para interactuar con los agentes
 - [ ] (Opcional) GitHub Copilot API como `LLMProvider` (generalizar providers)
 - [ ] Crear los agentes faltantes de la especificación inicial
+- [ ] Chunking de conversaciones largas (dividir en partes, resumir, consolidar)
 - [ ] Descanso y dogfooding 🎉
 
 ## Integraciones futuras
