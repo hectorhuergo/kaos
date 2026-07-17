@@ -50,7 +50,7 @@ class Settings(BaseModel):
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str | None = None
     llm_base_url: str | None = None
-    llm_timeout: float = 300.0
+    llm_timeout: float = 600.0
     github_token: str | None = None
     anthropic_api_key: str | None = None
     # GitHub Copilot OAuth token (gho_…) obtained via `kaos copilot login`.
@@ -70,7 +70,7 @@ class Settings(BaseModel):
 
     # Discord backfill (read a thread/channel history via REST)
     discord_backfill_channel_id: str | None = None
-    discord_message_limit: int = 100
+    discord_message_limit: int = 50
 
     # Persistence
     database_url: str | None = None
