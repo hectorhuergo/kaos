@@ -16,15 +16,14 @@ WORKDIR /app
 # Instalar 'uv' de forma nativa descargando el binario oficial
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copiar archivos de empaquetado e instalar dependencias con el extra del dashboard
+# Copiar archivos de empaquetado e instalar dependencias estándar
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --extra dashboard
+RUN uv sync --frozen --no-dev
 
 # Copiar el resto del código del proyecto
 COPY . .
 
 # Render asigna dinámicamente un puerto mediante la variable de entorno $PORT
-# Exponemos el puerto estándar por si acaso, pero el comando usará la variable de Render
 EXPOSE 10000
 
 # Comando de inicio leyendo la variable PORT asignada por Render
