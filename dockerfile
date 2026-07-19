@@ -16,10 +16,13 @@ WORKDIR /app
 # Instalar 'uv' de forma nativa descargando el binario oficial
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# COPIAR TODO EL PROYECTO PRIMERO (Evita el fallo de compilación del paquete local)
+# COPIAR TODO EL PROYECTO PRIMERO
 COPY . .
 
-# Sincronizar e instalar todas las dependencias del proyecto de forma congelada
+# INSTALACIÓN EXPLÍCITA: Forzamos la instalación de uvicorn y fastapi en el entorno global del contenedor
+RUN uv pip install --system uvicorn fastapi
+
+# Sincronizar e instalar el resto de las dependencias estándar del proyecto
 RUN uv sync --frozen --no-dev
 
 # Render asigna dinámicamente un puerto mediante la variable de entorno $PORT
