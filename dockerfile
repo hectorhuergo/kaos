@@ -16,17 +16,14 @@ WORKDIR /app
 # Instalar 'uv' de forma nativa descargando el binario oficial
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# COPIAR TODO EL PROYECTO PRIMERO
+# Copiar todo el proyecto primero
 COPY . .
 
-# INSTALACIÓN EXPLÍCITA: Forzamos la instalación de uvicorn y fastapi en el entorno global del contenedor
-RUN uv pip install --system uvicorn fastapi
-
-# Sincronizar e instalar el resto de las dependencias estándar del proyecto
+# Sincronizar e instalar todas las dependencias del proyecto de forma congelada
 RUN uv sync --frozen --no-dev
 
 # Render asigna dinámicamente un puerto mediante la variable de entorno $PORT
 EXPOSE 10000
 
-# Comando de inicio leyendo la variable PORT asignada por Render
-CMD ["sh", "-c", "uv run kaos serve --port ${PORT:-10000} --host 0.0.0.0"]
+# Comando de inicio: Forzamos a uv a incluir uvicorn bajo demanda al ejecutar el servidor
+CMD ["sh", "-c", "uv run --with uvicorn kaos serve --port ${PORT:-10000} --host 0.0.0.0"]
