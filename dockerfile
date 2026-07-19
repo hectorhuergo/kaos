@@ -25,5 +25,5 @@ RUN uv sync --frozen --no-dev
 # Render asigna dinámicamente un puerto mediante la variable de entorno $PORT
 EXPOSE 10000
 
-# Comando de inicio: Forzamos a uv a incluir uvicorn bajo demanda al ejecutar el servidor
-CMD ["sh", "-c", "uv run --with uvicorn kaos serve --port ${PORT:-10000} --host 0.0.0.0"]
+# Comando de inicio: Inyectamos uvicorn, asyncpg y psycopg2-binary bajo demanda
+CMD ["sh", "-c", "uv run --with uvicorn --with asyncpg --with psycopg2-binary kaos serve --port ${PORT:-10000} --host 0.0.0.0"]
