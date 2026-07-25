@@ -217,6 +217,75 @@ def test_complete_raises_llm_error_with_provider_message() -> None:
     assert "Unknown model: meta-llama-3.1-8b-instruct" in str(err)
 
 
+def test_complete_injects_num_ctx_when_configured() -> None:
+    """With ``num_ctx`` set, Ollama is called on its native ``/api/chat`` API.
+
+    The OpenAI-compatible endpoint ignores ``num_ctx``; the native API applies it
+    via ``options.num_ctx``. This is how KAOS raises Ollama's small default
+    context and avoids ``exceeds available context size`` on long conversations —
+    no prompt chunking, no degraded summaries.
+    """
+    import asyncio
+    import json
+
+    import httpx
+
+    from kaos.contracts.llm import Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "ok"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider.ollama(
+        model="gemma3:4b", client=client, num_ctx=8192
+    )
+
+    async def scenario() -> str:
+        try:
+            return await provider.complete([Message(role="user", content="hola")])
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(scenario()) == "ok"
+    assert seen["path"] == "/api/chat"  # native endpoint, not /v1/chat/completions
+    assert seen["body"]["options"]["num_ctx"] == 8192
+
+
+def test_complete_omits_num_ctx_by_default() -> None:
+    """Hosted providers never receive ``num_ctx`` (would be an unknown param)."""
+    import asyncio
+
+    import httpx
+
+    from kaos.contracts.llm import Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(model="gpt-4o-mini", api_key="sk", client=client)
+
+    async def scenario() -> str:
+        try:
+            return await provider.complete([Message(role="user", content="hola")])
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(scenario()) == "ok"
+    assert "num_ctx" not in seen
+
+
 def test_complete_wraps_transport_errors_as_llm_error() -> None:
     """A transport failure (no network) becomes an ``LLMError``, not a raw httpx one."""
     import asyncio
@@ -247,4 +316,38 @@ def test_complete_wraps_transport_errors_as_llm_error() -> None:
     err = asyncio.run(scenario())
     assert err.status_code is None
     assert "No se pudo contactar a github-models" in str(err)
+
+
+def test_complete_reports_timeout_clearly() -> None:
+    """A read timeout surfaces an explicit, non-empty reason (not a bare colon)."""
+    import asyncio
+
+    import httpx
+
+    from kaos.contracts.llm import LLMError, Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(
+        model="gemma", api_key="x", client=client, name="ollama"
+    )
+
+    async def scenario() -> LLMError:
+        try:
+            try:
+                await provider.complete([Message(role="user", content="hola")])
+            except LLMError as exc:
+                return exc
+            raise AssertionError("expected LLMError")
+        finally:
+            await client.aclose()
+
+    err = asyncio.run(scenario())
+    assert err.status_code is None
+    assert "timeout" in str(err).lower()
+    assert "KAOS_LLM_TIMEOUT" in str(err)
+
 

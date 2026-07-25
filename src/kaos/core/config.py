@@ -51,6 +51,10 @@ class Settings(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_timeout: float = 600.0
+    # Context window (tokens) for local providers that honour it (Ollama /
+    # llama.cpp). ``None`` keeps the server default; raise it (e.g. 8192) so long
+    # conversations are not rejected for exceeding the default context size.
+    llm_num_ctx: int | None = None
     github_token: str | None = None
     anthropic_api_key: str | None = None
     # GitHub Copilot OAuth token (gho_…) obtained via `kaos copilot login`.
@@ -115,6 +119,12 @@ class Settings(BaseModel):
         except ValueError:
             llm_timeout = 300.0
 
+        num_ctx_raw = get("KAOS_LLM_NUM_CTX")
+        try:
+            llm_num_ctx = int(num_ctx_raw) if num_ctx_raw else None
+        except ValueError:
+            llm_num_ctx = None
+
         interval_raw = get("KAOS_SCHEDULER_INTERVAL")
         try:
             scheduler_interval = float(interval_raw) if interval_raw else 900.0
@@ -127,6 +137,7 @@ class Settings(BaseModel):
             llm_api_key=get("KAOS_LLM_API_KEY"),
             llm_base_url=get("KAOS_LLM_BASE_URL"),
             llm_timeout=llm_timeout,
+            llm_num_ctx=llm_num_ctx,
             github_token=get("KAOS_GITHUB_TOKEN") or get("GITHUB_TOKEN"),
             anthropic_api_key=get("KAOS_ANTHROPIC_API_KEY") or get("ANTHROPIC_API_KEY"),
             copilot_oauth_token=get("KAOS_COPILOT_TOKEN") or get("GITHUB_COPILOT_TOKEN"),

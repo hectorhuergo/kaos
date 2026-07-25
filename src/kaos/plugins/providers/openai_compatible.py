@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import httpx
 
@@ -45,6 +45,7 @@ class OpenAICompatibleLLMProvider:
         timeout: float = 30.0,
         max_retries: int = 5,
         extra_headers: dict[str, str] | None = None,
+        num_ctx: int | None = None,
     ) -> None:
         self._model = model
         self._api_key = api_key
@@ -55,6 +56,11 @@ class OpenAICompatibleLLMProvider:
         self._client = client
         self._owns_client = client is None
         self._extra_headers = extra_headers or {}
+        # Context window override (tokens). Only meaningful for servers that
+        # honour it (Ollama/llama.cpp): raises the default context so large
+        # prompts (e.g. long conversations) are not rejected. Left ``None`` for
+        # hosted providers, whose context size is fixed server-side.
+        self._num_ctx = num_ctx
         self._current_task: asyncio.Task[str] | None = None
 
     @classmethod
@@ -112,6 +118,7 @@ class OpenAICompatibleLLMProvider:
         base_url: str = OLLAMA_BASE_URL,
         client: httpx.AsyncClient | None = None,
         timeout: float = 120.0,
+        num_ctx: int | None = None,
     ) -> OpenAICompatibleLLMProvider:
         """Build a provider for a local Ollama server (OpenAI-compatible API).
 
@@ -120,6 +127,11 @@ class OpenAICompatibleLLMProvider:
         zero cost. Start it with ``docker compose up -d ollama`` and pull a model
         (``ollama pull llama3.2:3b``). The default endpoint assumes KAOS runs on
         the host; override ``base_url`` (``KAOS_LLM_BASE_URL``) if not.
+
+        ``num_ctx`` raises the context window (in tokens) beyond Ollama's small
+        default (2k–4k). Local models such as Gemma 3 support far larger
+        contexts, so setting this avoids ``exceeds available context size``
+        rejections on long conversations without any prompt chunking.
         """
         return cls(
             model=model,
@@ -128,6 +140,7 @@ class OpenAICompatibleLLMProvider:
             name="ollama",
             client=client,
             timeout=timeout,
+            num_ctx=num_ctx,
         )
 
     @property
@@ -160,38 +173,134 @@ class OpenAICompatibleLLMProvider:
             self._current_task = task
 
         try:
+            rendered = [{"role": m.role, "content": m.content} for m in messages]
+            # Ollama ignores a top-level ``num_ctx`` on its OpenAI-compatible
+            # ``/v1/chat/completions`` endpoint; the context window can only be
+            # raised per request via the *native* ``/api/chat`` API (inside an
+            # ``options`` object). So when a context override is configured for
+            # Ollama we talk to the native endpoint; every other provider keeps
+            # using the OpenAI-compatible path unchanged.
+            if self._num_ctx is not None and self._name == "ollama":
+                return await self._complete_ollama_native(rendered, options)
             payload = {
                 "model": self._model,
-                "messages": [{"role": m.role, "content": m.content} for m in messages],
+                "messages": rendered,
                 **options,
             }
-            client = self._get_client()
             url = f"{self._base_url}/chat/completions"
             token = await self._auth_token()
             headers = {"Authorization": f"Bearer {token}", **self._extra_headers}
-            try:
-                for attempt in range(self._max_retries + 1):
-                    response = await client.post(url, json=payload, headers=headers)
-                    if (
-                        response.status_code == _RATE_LIMITED
-                        and attempt < self._max_retries
-                    ):
-                        await asyncio.sleep(self._retry_after(response))
-                        continue
-                    if response.is_success:
-                        data = response.json()
-                        return str(data["choices"][0]["message"]["content"])
-                    raise self._error_from(response)  # 4xx/5xx: surface the reason
-                raise self._error_from(response)  # retries exhausted (still 429)
-            except httpx.RequestError as exc:  # transport: DNS, connect, timeout…
-                raise LLMError(
-                    f"No se pudo contactar a {self._name}: {exc}",
-                    provider=self._name,
-                    model=self._model,
-                ) from exc
+            return await self._post_with_retry(
+                url, payload, headers, self._extract_openai
+            )
         finally:
             if task and self._current_task == task:
                 self._current_task = old_task
+
+    async def _post_with_retry(
+        self,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        extract: Callable[[dict[str, object]], str],
+    ) -> str:
+        """POST ``payload`` and return the extracted completion, retrying on 429.
+
+        Shared by the OpenAI-compatible path and Ollama's native ``/api/chat``
+        path; each supplies its own ``extract`` for the response shape.
+        """
+        client = self._get_client()
+        try:
+            for attempt in range(self._max_retries + 1):
+                response = await client.post(url, json=payload, headers=headers)
+                if (
+                    response.status_code == _RATE_LIMITED
+                    and attempt < self._max_retries
+                ):
+                    await asyncio.sleep(self._retry_after(response))
+                    continue
+                if response.is_success:
+                    return extract(response.json())
+                raise self._error_from(response)  # 4xx/5xx: surface the reason
+            raise self._error_from(response)  # retries exhausted (still 429)
+        except httpx.RequestError as exc:  # transport: DNS, connect, timeout…
+            raise LLMError(
+                f"No se pudo contactar a {self._name}: {self._transport_detail(exc)}",
+                provider=self._name,
+                model=self._model,
+            ) from exc
+
+    def _transport_detail(self, exc: httpx.RequestError) -> str:
+        """A clear, non-empty reason for a transport failure.
+
+        ``httpx`` timeout exceptions often stringify to an empty message, which
+        surfaced as a bare ``No se pudo contactar a ollama:``. Name the timeout
+        explicitly (with the configured limit) and hint at ``KAOS_LLM_TIMEOUT``,
+        since slow local models (CPU inference) are the common cause.
+        """
+        if isinstance(exc, httpx.TimeoutException):
+            return (
+                f"timeout tras {self._timeout:.0f}s — el modelo tardó demasiado "
+                "en responder; subí KAOS_LLM_TIMEOUT si usás un modelo local lento"
+            )
+        return str(exc) or type(exc).__name__
+
+    @staticmethod
+    def _extract_openai(data: dict[str, object]) -> str:
+        """Pull the message content from an OpenAI-style chat completion body."""
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if isinstance(message, dict):
+                    return str(message.get("content", ""))
+        if "error" in data:
+            error = data["error"]
+            message = error.get("message") if isinstance(error, dict) else error
+            raise LLMError(f"Error del proveedor: {message}")
+        raise LLMError(f"Respuesta inesperada del proveedor: {data}")
+
+    async def _complete_ollama_native(
+        self, rendered: list[dict[str, str]], options: dict[str, object]
+    ) -> str:
+        """Complete via Ollama's native ``/api/chat`` so ``num_ctx`` is honoured.
+
+        Ollama's OpenAI-compatible endpoint has no way to set the context window
+        per request; the native API does, via ``options.num_ctx``. Any known
+        generation options passed per call are forwarded into the same object.
+        """
+        native_base = (
+            self._base_url[: -len("/v1")]
+            if self._base_url.endswith("/v1")
+            else self._base_url
+        )
+        url = f"{native_base}/api/chat"
+        ollama_options: dict[str, object] = {"num_ctx": self._num_ctx}
+        for key in ("temperature", "top_p", "top_k", "seed", "num_predict"):
+            if key in options:
+                ollama_options[key] = options[key]
+        payload: dict[str, object] = {
+            "model": self._model,
+            "messages": rendered,
+            "stream": False,
+            "options": ollama_options,
+        }
+        token = await self._auth_token()
+        headers = {"Authorization": f"Bearer {token}", **self._extra_headers}
+        return await self._post_with_retry(
+            url, payload, headers, self._extract_ollama_native
+        )
+
+    @staticmethod
+    def _extract_ollama_native(data: dict[str, object]) -> str:
+        """Pull the message content from Ollama's native ``/api/chat`` body."""
+        message = data.get("message")
+        if isinstance(message, dict) and "content" in message:
+            return str(message["content"])
+        if "error" in data:
+            raise LLMError(f"Ollama error: {data['error']}")
+        raise LLMError(f"Respuesta inesperada de Ollama: {data}")
 
     def _error_from(self, response: httpx.Response) -> LLMError:
         """Build a clear :class:`LLMError` from a failed provider response.

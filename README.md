@@ -114,6 +114,7 @@ credenciales); `kaos up` a secas arranca el runtime según tu `.env`.
 | `KAOS_LLM_API_KEY` | API key para `openai` |
 | `KAOS_LLM_BASE_URL` | Endpoint OpenAI-compatible (OpenAI, Azure, Ollama…) |
 | `KAOS_LLM_TIMEOUT` | Timeout (s) por llamada al LLM; súbelo para modelos de razonamiento (default 120) |
+| `KAOS_LLM_NUM_CTX` | Ventana de contexto (tokens) para `ollama`/llama.cpp; súbela (p. ej. 8192) para conversaciones largas y evitar `exceeds available context size` |
 | `KAOS_GITHUB_TOKEN` / `GITHUB_TOKEN` | Token para GitHub Models (`github`) |
 | `KAOS_COPILOT_TOKEN` | Token de GitHub Copilot (`copilot`); obtenelo con `kaos copilot login` |
 | `KAOS_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | API key para Claude (`anthropic`) |

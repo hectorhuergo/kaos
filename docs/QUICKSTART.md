@@ -195,6 +195,8 @@ Genera el plugin (implementando su contrato) + su test, sin tocar el Core.
 | `403 Missing Access` | El bot no está en el server / sin acceso al canal. Invitalo. |
 | `429` (rate limit) | GitHub Models limita ~2 req/min; KAOS reintenta solo. |
 | Modelo lento (razonamiento) | Subí `KAOS_LLM_TIMEOUT` (p. ej. 240). |
+| `exceeds available context size` (Ollama) | Subí `KAOS_LLM_NUM_CTX` (p. ej. 8192); el default de Ollama (2k–4k) es muy chico para conversaciones largas. KAOS lo aplica por petición vía la API nativa `/api/chat`. |
+| `exceeds available context size` con **Lemonade / llama.cpp** | Estos servidores fijan el contexto **al cargar el modelo** e **ignoran** el `num_ctx` por petición. Poné `KAOS_LLM_NUM_CTX` en el valor **real** con que cargaste el modelo (p. ej. 4096): el `resume-agent` **trocea** la conversación (map-reduce, ADR-0024) para caber. Para subir el contexto de verdad, cargá el modelo con `--ctx-size` mayor o usá **Ollama real**. |
 | `falta 'uvicorn'` en `kaos serve` | `uv pip install -e .[dashboard]`. |
 
 ## Siguiente paso

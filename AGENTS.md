@@ -133,6 +133,7 @@ KAOS debe terminar administrando su propio desarrollo.
 - ADR-0021 — GitHub Copilot Provider (device-flow OAuth)
 - ADR-0022 — Per-run Provider & Model Selection
 - ADR-0023 — Per-subscription Agent Selection
+- ADR-0024 — Context-Aware Summaries via Map-Reduce
 
 ### RFC
 

@@ -78,7 +78,12 @@ async def run_backfill(
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(DiscordConnector(source, emit_completed=True))
     runtime.register_agent(
-        ResumeAgent(llm, extra_instructions=extra_instructions, agent_id=agent_id)
+        ResumeAgent(
+            llm,
+            extra_instructions=extra_instructions,
+            agent_id=agent_id,
+            context_tokens=settings.llm_num_ctx,
+        )
     )
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
@@ -157,7 +162,12 @@ async def run_forum_backfill(
         print(f"error: {exc}")
         return 1
 
-    agent = ResumeAgent(llm, extra_instructions=extra_instructions, agent_id=agent_id)
+    agent = ResumeAgent(
+        llm,
+        extra_instructions=extra_instructions,
+        agent_id=agent_id,
+        context_tokens=settings.llm_num_ctx,
+    )
     publisher = publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
     storage = build_storage(settings)
     cache = SummaryCache(storage)

@@ -14,6 +14,7 @@ from kaos.contracts.artifact import Artifact
 from kaos.contracts.context import Context
 from kaos.contracts.event import Event
 from kaos.contracts.llm import LLMProvider, Message
+from kaos.core.chunking import estimate_tokens, group_by_token_budget
 from kaos.core.redaction import redact_secrets
 
 ARTIFACT_KIND = "conversation.summary"
@@ -24,7 +25,9 @@ CONVERSATION_COMPLETED = "conversation.completed"
 # caches recompute instead of serving knowledge produced by an older contract.
 # v2: the transcript now prefixes each message with its ISO-8601 timestamp and
 # the prompt asks the model to use those dates.
-PROMPT_VERSION = "2"
+# v3: oversized conversations are summarized via map-reduce (ADR-0024); the
+# result for a large thread can differ from a single-shot summary.
+PROMPT_VERSION = "3"
 
 SYSTEM_PROMPT = (
     "Eres un analista que produce resúmenes ejecutivos de conversaciones de "
@@ -41,6 +44,29 @@ SYSTEM_PROMPT = (
     "eventos al incluirlas en el resumen, y no inventes fechas si no están."
 )
 
+# Map step: turn one chunk of the conversation into concise notes (not the final
+# structured report). Kept short so partial notes stay small and recombine well.
+MAP_PROMPT = (
+    "Eres un analista. Resume el siguiente fragmento de una conversación de "
+    "trabajo en notas concisas en viñetas, preservando estado, decisiones, "
+    "riesgos y próximos pasos que aparezcan. No inventes nada que no esté en el "
+    "texto. Devuelve solo las viñetas, sin encabezados."
+)
+
+# Reduce step: the user content that precedes the concatenated partial notes so
+# the model synthesizes a single report (using the structured SYSTEM_PROMPT).
+REDUCE_USER_PREFIX = (
+    "A continuación hay notas parciales, en orden, de distintos tramos de la "
+    "MISMA conversación (fue dividida por tamaño). Sintetiza UN único informe "
+    "ejecutivo coherente que integre todos los tramos sin repetir secciones:\n\n"
+)
+
+# Guards for the per-request input budget derived from the context window.
+_OUTPUT_RESERVE_RATIO = 0.35  # leave room for the model's own answer
+_SAFETY_MARGIN_TOKENS = 128
+_MIN_CHUNK_TOKENS = 256
+
+
 
 class ResumeAgent:
     """Summarizes a conversation into an executive Markdown report.
@@ -53,7 +79,12 @@ class ResumeAgent:
     name = "resume-agent"
 
     def __init__(
-        self, llm: LLMProvider, *, extra_instructions: str = "", agent_id: str | None = None
+        self,
+        llm: LLMProvider,
+        *,
+        extra_instructions: str = "",
+        agent_id: str | None = None,
+        context_tokens: int | None = None,
     ) -> None:
         self._llm = llm
         self._extra_instructions = extra_instructions.strip()
@@ -62,6 +93,11 @@ class ResumeAgent:
         # stamped on the artifact so surfaces (dashboards, metrics) attribute the
         # knowledge to the chosen agent.
         self._agent_id = (agent_id or "").strip() or None
+        # The model's context window (tokens), if known. When set and a
+        # conversation would overflow it, the agent summarizes via map-reduce
+        # (ADR-0024) instead of sending an oversized prompt. ``None`` keeps the
+        # single-shot behaviour (backward compatible).
+        self._context_tokens = context_tokens if context_tokens and context_tokens > 0 else None
 
     def _system_prompt(self) -> str:
         """The base prompt, optionally augmented with user instructions.
@@ -87,7 +123,7 @@ class ResumeAgent:
         timestamps to the transcript). Caches fold this into their fingerprint so
         a change here invalidates summaries produced under an older prompt.
         """
-        material = f"{PROMPT_VERSION}\n{self._system_prompt()}"
+        material = f"{PROMPT_VERSION}\n{self._system_prompt()}\n{self._context_tokens or 0}"
         return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
     @staticmethod
@@ -104,12 +140,7 @@ class ResumeAgent:
         if not messages:
             return []
 
-        summary = await self._llm.complete(
-            [
-                Message(role="system", content=self._system_prompt()),
-                Message(role="user", content=self._render(messages)),
-            ]
-        )
+        summary = await self._summarize(messages)
 
         # Belt-and-suspenders: scrub any secret the LLM may have echoed back
         # before the summary becomes a published, immutable artifact.
@@ -130,6 +161,92 @@ class ResumeAgent:
                 metadata=self._origin_metadata(messages),
             )
         ]
+
+    async def _summarize(self, events: Sequence[Event]) -> str:
+        """Summarize a conversation, chunking via map-reduce when it overflows.
+
+        With a known ``context_tokens`` budget, a conversation whose transcript
+        would exceed the model's usable input is split into ordered chunks: each
+        chunk is condensed into notes (*map*) and the notes are synthesized into
+        one coherent executive report (*reduce*). This keeps the required Markdown
+        structure intact — unlike concatenating partial summaries — and works on
+        servers with a small, fixed context window (e.g. llama.cpp/Lemonade).
+        """
+        budget = self._input_budget()
+        transcript = self._render(events)
+        if budget is None or estimate_tokens(transcript) <= budget:
+            return await self._llm.complete(
+                [
+                    Message(role="system", content=self._system_prompt()),
+                    Message(role="user", content=transcript),
+                ]
+            )
+        return await self._summarize_chunked(events, budget)
+
+    def _input_budget(self) -> int | None:
+        """Tokens available for the user content of one request, or ``None``.
+
+        Derived from the context window minus the system prompt, a reserve for
+        the model's own answer and a safety margin. ``None`` disables chunking.
+        """
+        if self._context_tokens is None:
+            return None
+        system_tokens = estimate_tokens(self._system_prompt())
+        reserve_output = max(_MIN_CHUNK_TOKENS, int(self._context_tokens * _OUTPUT_RESERVE_RATIO))
+        budget = self._context_tokens - system_tokens - reserve_output - _SAFETY_MARGIN_TOKENS
+        return max(_MIN_CHUNK_TOKENS, budget)
+
+    async def _summarize_chunked(self, events: Sequence[Event], budget: int) -> str:
+        """Map each chunk of events to notes, then reduce notes to one report."""
+        chunks = group_by_token_budget(
+            events, lambda e: estimate_tokens(self._render_one(e)), budget
+        )
+        notes: list[str] = []
+        for index, chunk in enumerate(chunks, start=1):
+            note = await self._llm.complete(
+                [
+                    Message(role="system", content=MAP_PROMPT),
+                    Message(
+                        role="user",
+                        content=f"Fragmento {index}/{len(chunks)}:\n\n{self._render(chunk)}",
+                    ),
+                ]
+            )
+            notes.append(redact_secrets(note.strip()))
+        return await self._reduce_notes(notes, budget)
+
+    async def _reduce_notes(self, notes: list[str], budget: int) -> str:
+        """Synthesize partial notes into the final structured report.
+
+        If the concatenated notes still overflow the budget, they are first
+        condensed in groups (a hierarchical reduce) until they fit, so very long
+        conversations converge instead of overflowing the context again.
+        """
+        combined = self._join_notes(notes)
+        if len(notes) > 1 and estimate_tokens(combined) > budget:
+            groups = group_by_token_budget(notes, estimate_tokens, budget)
+            merged: list[str] = []
+            for group in groups:
+                condensed = await self._llm.complete(
+                    [
+                        Message(role="system", content=MAP_PROMPT),
+                        Message(role="user", content=self._join_notes(group)),
+                    ]
+                )
+                merged.append(redact_secrets(condensed.strip()))
+            return await self._reduce_notes(merged, budget)
+        return await self._llm.complete(
+            [
+                Message(role="system", content=self._system_prompt()),
+                Message(role="user", content=f"{REDUCE_USER_PREFIX}{combined}"),
+            ]
+        )
+
+    @staticmethod
+    def _join_notes(notes: Sequence[str]) -> str:
+        """Concatenate partial notes, labelling each tramo to keep order clear."""
+        return "\n\n".join(f"— Tramo {i}:\n{note}" for i, note in enumerate(notes, start=1))
+
 
     def _origin_metadata(self, events: Sequence[Event]) -> dict[str, str]:
         """Metadata carried on the summary: origin channel + attributed agent."""
@@ -169,6 +286,19 @@ class ResumeAgent:
         return {"channel_id": next(iter(channels))} if len(channels) == 1 else {}
 
     @staticmethod
+    def _render_one(event: Event) -> str:
+        """Render a single message event as one transcript line (unredacted).
+
+        Used to estimate a message's token size when chunking; the full
+        :meth:`_render` applies redaction to the joined transcript.
+        """
+        author = event.payload.get("author", "unknown")
+        text = event.payload.get("text", "")
+        timestamp = event.payload.get("timestamp")
+        prefix = f"[{timestamp}] " if timestamp else ""
+        return f"{prefix}{author}: {text}"
+
+    @staticmethod
     def _render(events: Sequence[Event]) -> str:
         """Render the conversation as a plain transcript for the LLM.
 
@@ -178,12 +308,6 @@ class ResumeAgent:
         towards the LLM provider (Immutable Evidence keeps the raw event; only
         the derived transcript is scrubbed).
         """
-        lines = []
-        for event in events:
-            author = event.payload.get("author", "unknown")
-            text = event.payload.get("text", "")
-            timestamp = event.payload.get("timestamp")
-            prefix = f"[{timestamp}] " if timestamp else ""
-            lines.append(f"{prefix}{author}: {text}")
+        lines = [ResumeAgent._render_one(event) for event in events]
         return redact_secrets("\n".join(lines))
 

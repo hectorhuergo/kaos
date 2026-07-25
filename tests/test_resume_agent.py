@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 
 from kaos.contracts import Artifact, Context, Event, EventBus
+from kaos.contracts.llm import Message
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.agents.resume_agent import ARTIFACT_KIND, CONVERSATION_COMPLETED
 from kaos.runtime import InMemoryStorage, KaosRuntime
@@ -202,4 +204,96 @@ def test_resume_agent_end_to_end_in_runtime() -> None:
 
     stored = asyncio.run(storage.list_artifacts("w1"))
     assert len(stored) == 1
+
+
+class _ScriptedLLM:
+    """Records calls and answers map vs reduce differently, to inspect chunking."""
+
+    name = "scripted-llm"
+
+    def __init__(self, final: str) -> None:
+        self._final = final
+        self.calls: list[list[Message]] = []
+
+    async def complete(self, messages: Sequence[Message], **options: object) -> str:
+        from kaos.plugins.agents.resume_agent import MAP_PROMPT
+
+        self.calls.append(list(messages))
+        if messages[0].content == MAP_PROMPT:
+            return f"nota-{len(self.calls)}"
+        return self._final
+
+    @property
+    def map_calls(self) -> list[list[Message]]:
+        from kaos.plugins.agents.resume_agent import MAP_PROMPT
+
+        return [c for c in self.calls if c[0].content == MAP_PROMPT]
+
+    @property
+    def reduce_calls(self) -> list[list[Message]]:
+        from kaos.plugins.agents.resume_agent import MAP_PROMPT
+
+        return [c for c in self.calls if c[0].content != MAP_PROMPT]
+
+
+def test_large_conversation_is_summarized_via_map_reduce() -> None:
+    """An oversized conversation is chunked (map) then synthesized once (reduce).
+
+    The final report keeps the required structure (it is not a concatenation of
+    partial summaries) and every source message is still traced.
+    """
+    from kaos.plugins.agents.resume_agent import REDUCE_USER_PREFIX
+
+    final = "# Resumen Ejecutivo\n## Estado\n- consolidado"
+    llm = _ScriptedLLM(final=final)
+    # 12 long messages force the transcript over a small context window.
+    long_text = "detalle importante del avance del proyecto " * 6
+    events = [_message(f"user{i}", long_text) for i in range(12)]
+    context = Context(workspace="w1", events=(*events, _completed()))
+    agent = ResumeAgent(llm, context_tokens=600)
+
+    artifacts = asyncio.run(agent.run(context))
+
+    # Multiple map calls (chunks) + exactly one reduce (final structured report).
+    assert len(llm.map_calls) >= 2
+    assert len(llm.reduce_calls) == 1
+    # The reduce uses the structured system prompt and the reduce user prefix.
+    reduce = llm.reduce_calls[0]
+    assert reduce[1].content.startswith(REDUCE_USER_PREFIX)
+    # One coherent summary, not concatenated partials.
+    assert artifacts[0].content["summary"] == final
+    # Traceability preserved: every message is a source event.
+    assert artifacts[0].content["message_count"] == 12
+    assert artifacts[0].source_events == tuple(e.id for e in events)
+
+
+def test_small_conversation_stays_single_shot_even_with_budget() -> None:
+    """A conversation that fits the context window is summarized in one call."""
+    llm = _ScriptedLLM(final="# Resumen Ejecutivo")
+    context = Context(
+        workspace="w1", events=(_message("ana", "hola"), _message("juan", "listo"), _completed())
+    )
+    agent = ResumeAgent(llm, context_tokens=100_000)
+
+    asyncio.run(agent.run(context))
+
+    # Single call, no map/reduce split.
+    assert len(llm.calls) == 1
+    assert len(llm.map_calls) == 0
+    assert llm.calls[0][1].content == "ana: hola\njuan: listo"
+
+
+def test_without_context_tokens_never_chunks() -> None:
+    """Backward compatible: with no known context window, always single-shot."""
+    llm = _ScriptedLLM(final="# Resumen Ejecutivo")
+    long_text = "texto larguísimo " * 500
+    events = [_message(f"u{i}", long_text) for i in range(20)]
+    context = Context(workspace="w1", events=(*events, _completed()))
+    agent = ResumeAgent(llm)  # context_tokens=None
+
+    asyncio.run(agent.run(context))
+
+    assert len(llm.calls) == 1
+    assert len(llm.map_calls) == 0
+
 

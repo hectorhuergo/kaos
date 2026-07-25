@@ -87,7 +87,12 @@ async def run_github(
     runtime = KaosRuntime(storage=storage)
     runtime.register_connector(GitHubConnector(source, repo=target, emit_completed=True))
     runtime.register_agent(
-        ResumeAgent(llm, extra_instructions=extra_instructions, agent_id=agent_id)
+        ResumeAgent(
+            llm,
+            extra_instructions=extra_instructions,
+            agent_id=agent_id,
+            context_tokens=settings.llm_num_ctx,
+        )
     )
     runtime.register_publisher(
         publisher or (ConsolePublisher() if dry_run else build_publisher(settings))

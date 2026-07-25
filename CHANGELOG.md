@@ -1,6 +1,33 @@
 # Changelog
 
 ## Unreleased
+- LLM errors: a request timeout now surfaces an explicit reason instead of a bare
+  `No se pudo contactar a ollama:` (httpx timeouts stringify empty). The message
+  names the timeout, the configured limit and hints at `KAOS_LLM_TIMEOUT` — the
+  common cause being slow local CPU inference.
+- Summaries: the `resume-agent` now summarizes oversized conversations via
+  **map-reduce** (ADR-0024) instead of sending one huge prompt. When the model's
+  context window (`KAOS_LLM_NUM_CTX` → `ResumeAgent(context_tokens=…)`) is known
+  and a conversation would overflow it, the transcript is split into ordered
+  chunks, each condensed into notes (*map*), and the notes synthesized into a
+  single coherent report (*reduce*, hierarchical if still too big). This keeps
+  the required Markdown structure intact — unlike concatenating partial summaries
+  — and works on servers with a small, fixed context window (Lemonade/llama.cpp)
+  that ignore a per-request `num_ctx`. New pure helper `kaos.core.chunking`
+  (`estimate_tokens`, `group_by_token_budget`); traceability (source events,
+  message count) is preserved. With no known context window the behaviour stays
+  single-shot (backward compatible). `KAOS_LLM_NUM_CTX` now means "the model's
+  real context window in tokens": raise it for real Ollama, set it to the loaded
+  value for Lemonade/llama.cpp so the agent chunks to fit.
+- LLM: configurable context window for local providers (`KAOS_LLM_NUM_CTX`,
+  `Settings.llm_num_ctx`). Ollama's OpenAI-compatible endpoint ignores
+  `num_ctx`, so when it is set for the `ollama` provider KAOS now calls Ollama's
+  **native** `/api/chat` API with `options.num_ctx`, raising the small default
+  context (4k) — fixing `exceeds available context size` on long conversations
+  without any prompt chunking (which would degrade summaries). Omitted by
+  default, so hosted providers are unaffected (backward compatible). The
+  `scripts/translate_all.py` pipeline now loads `.env` and reads `Settings.from_env()`
+  so it honours the same configuration.
 - LLM: raised the default request timeout to 300s (`KAOS_LLM_TIMEOUT`) so slower
   reasoning/large models have room to answer before timing out.
 - LLM errors: providers now raise a clear `LLMError` (new, in `kaos.contracts.llm`)

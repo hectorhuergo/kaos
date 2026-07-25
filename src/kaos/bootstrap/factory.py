@@ -8,6 +8,7 @@ and the plugins decoupled from each other.
 from __future__ import annotations
 
 import contextlib
+import sys
 
 from kaos.contracts.config_store import ConfigStore
 from kaos.contracts.credential_store import CredentialStore
@@ -229,8 +230,24 @@ def build_llm(settings: Settings) -> LLMProvider:
             if settings.llm_model and settings.llm_model != default_model
             else DEFAULT_OLLAMA_MODEL
         )
+        # Visible confirmation in server/CLI logs of the context window actually
+        # applied. When ``None`` the request uses Ollama's small default (2k–4k),
+        # which rejects long conversations — a hint to set ``KAOS_LLM_NUM_CTX``.
+        if settings.llm_num_ctx:
+            print(
+                f"[kaos] ollama num_ctx={settings.llm_num_ctx} "
+                f"(via native /api/chat) model={model}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "[kaos] ollama num_ctx not set (KAOS_LLM_NUM_CTX) -> using "
+                "server default context; long prompts may be rejected",
+                file=sys.stderr,
+            )
         return OpenAICompatibleLLMProvider.ollama(
-            model=model, base_url=base_url, timeout=settings.llm_timeout
+            model=model, base_url=base_url, timeout=settings.llm_timeout,
+            num_ctx=settings.llm_num_ctx,
         )
     if settings.llm_provider == "openai":
         if not settings.llm_api_key:
@@ -286,7 +303,9 @@ def build_runtime(settings: Settings) -> KaosRuntime:
     """
     runtime = KaosRuntime(storage=build_storage(settings))
     runtime.register_connector(build_connector(settings))
-    runtime.register_agent(ResumeAgent(build_llm(settings)))
+    runtime.register_agent(
+        ResumeAgent(build_llm(settings), context_tokens=settings.llm_num_ctx)
+    )
     runtime.register_publisher(build_publisher(settings))
     return runtime
 
