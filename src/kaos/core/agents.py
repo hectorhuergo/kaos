@@ -61,6 +61,17 @@ AGENT_CATALOG: tuple[AgentInfo, ...] = (
         trigger="evento task.consolidate",
         augmentable=True,
     ),
+    AgentInfo(
+        id="translate-agent",
+        label="Translate Agent",
+        description=(
+            "Traduce archivos de localización (.pot) y produce un "
+            "artefacto de traducción (.po) listo para importar."
+        ),
+        produces="translation.artifact",
+        trigger="manual o evento chat.message",
+        augmentable=True,
+    ),
 )
 
 

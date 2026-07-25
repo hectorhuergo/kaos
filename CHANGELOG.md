@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Translate Agent: a new `translate-agent` localizes Gettext `.pot` files into
+  Spanish `.po`, producing a `translation.artifact`. It reads the source through
+  the injected `file_read` tool (KAOS `Tool` contract, `run(args)`), so it stays
+  storage-agnostic and testable. Registered in the agent catalog (visible in the
+  console) with its base prompt wired for prompt augmentation. Batch scripts
+  `scripts/translate_file.py` (single file, safe 40-entry segmentation) and
+  `scripts/translate_all.py` (whole folder) drive the real pipeline, loading the
+  `.env` via `load_dotenv()` + `Settings.from_env()` so `KAOS_LLM_NUM_CTX` is
+  honored.
 - Dashboard cards pagination: a workspace's artifact cards now render the first
   page server-side and **lazily load the rest as you scroll down** (a downward
   infinite scroll, the reverse of the chat's upward one), via a new

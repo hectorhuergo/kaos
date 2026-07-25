@@ -12,3 +12,6 @@ build/
 *.egg-info/
 *.log
 kaos-dashboard.html
+
+# Local uploaded data (e.g. .pot sources for translate-agent)
+uploads/
