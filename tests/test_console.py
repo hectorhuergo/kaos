@@ -158,6 +158,16 @@ def test_console_includes_markdown_rendering(client: TestClient) -> None:
     assert "DOMPurify.sanitize(" in html
 
 
+def test_console_fills_title_and_inline_meta(client: TestClient) -> None:
+    html = client.get("/console").text
+    # Opening a session loads its title into the «Más opciones» form (regression:
+    # the Título field stayed blank even when the thread had a title).
+    assert "tEl.value = s.title" in html
+    # The read-only metadata renders as inline chips, not a one-pair-per-row grid.
+    assert "cm-item" in html
+    assert "flex-wrap:wrap" in html
+
+
 def test_providers_lists_catalog(client: TestClient) -> None:
     resp = client.get("/api/providers")
     assert resp.status_code == 200

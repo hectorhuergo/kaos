@@ -91,9 +91,10 @@ pre.out{white-space:pre-wrap;word-wrap:break-word;background:#0f1115;border:1px 
 .chat-item .ci-ico{margin-right:.35rem}
 .ctx-card{background:#12151c;border:1px solid #2f3646;border-radius:10px;padding:.8rem}
 .ctx-head{font-weight:600;margin-bottom:.4rem}
-.chat-meta-grid{display:grid;grid-template-columns:auto 1fr;gap:.15rem .6rem;align-items:baseline}
+.chat-meta-grid{display:flex;flex-wrap:wrap;gap:.3rem .55rem;align-items:baseline}
+.chat-meta-grid .cm-item{display:inline-flex;gap:.3rem;align-items:baseline;background:#0f1115;border:1px solid #2f3646;border-radius:999px;padding:.1rem .55rem;font-size:.8rem;max-width:100%}
 .chat-meta-grid .cm-k{color:#6f7787}
-.chat-meta-grid .cm-v{color:#c7cdd8;word-break:break-word}
+.chat-meta-grid .cm-v{color:#c7cdd8;word-break:break-word;overflow:hidden;text-overflow:ellipsis}
 .ctx-body{white-space:pre-wrap;font-size:.9rem;color:#cdd3dd;max-height:42vh;overflow:auto}
 .chat-anchor{margin:.1rem 0 .5rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .chat-grp{color:#6f7a89;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin:.75rem .2rem .3rem;display:flex;align-items:center;gap:.4rem}
@@ -1014,6 +1015,7 @@ function openChatSession(i){
   if(s.user_id) $('#chat-user').value = s.user_id;
   const aid = $('#chat-agent'); if(aid && s.agent_id) aid.value = s.agent_id;
   $('#chat-project').value = s.project || '';
+  const tEl = $('#chat-title'); if(tEl) tEl.value = s.title || '';
   const k = $('#chat-kind');
   if(k && s.kind){ if(![...k.options].some(o => o.value===s.kind)) k.add(new Option(s.kind, s.kind)); k.value = s.kind; }
   renderChatSide();
@@ -1042,7 +1044,7 @@ function renderChatMeta(s){
     ['Actualizado', shortDate(s.updated_at)],
   ].filter(r => r[1] !== undefined && r[1] !== null && String(r[1]).trim() !== '');
   box.innerHTML = '<div class="chat-meta-grid">'
-    + rows.map(r => `<span class="cm-k">${esc(r[0])}</span><span class="cm-v">${esc(String(r[1]))}</span>`).join('')
+    + rows.map(r => `<span class="cm-item"><span class="cm-k">${esc(r[0])}</span><span class="cm-v">${esc(String(r[1]))}</span></span>`).join('')
     + '</div>';
 }
 
