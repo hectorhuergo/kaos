@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- Traceability graph — clickable workspace nodes: a **workspace/subscription node**
+  (e.g. `proyecto-x`, `JoseValperga/proyecto-x-grid`) now **links to its cards
+  section** instead of leading nowhere. Each dashboard `<section>` gets a safe
+  `id="ws-<slug>"` anchor and every graph node is wired via a new explicit
+  `KnowledgeGraph.to_mermaid(anchors=…)` map (node.id → href): artifacts →
+  `#node-<id>` (revealed on demand via card pagination), workspaces →
+  `#ws-<slug>` (always present server-side). `click_prefix` is kept for backward
+  compatibility; `anchors` takes precedence when both are given.
+- Console «Más opciones» polish: the read-only thread **metadata now renders as
+  inline chips** (flex-wrap) instead of a one-pair-per-row grid, and opening a
+  session **loads its title into the Título field** (it stayed blank before even
+  when the thread had a title). Node → card navigation in the dashboard graph is
+  already robust: clicking a node not yet in view pulls card pages on demand until
+  the target loads, then scrolls to it.
 - Translate Agent: a new `translate-agent` localizes Gettext `.pot` files into
   Spanish `.po`, producing a `translation.artifact`. It reads the source through
   the injected `file_read` tool (KAOS `Tool` contract, `run(args)`), so it stays
