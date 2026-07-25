@@ -6,6 +6,8 @@ summary is printed to the console instead of published.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from pathlib import Path
 from uuid import UUID
 
 import httpx
@@ -14,6 +16,7 @@ from kaos.bootstrap.factory import build_llm, build_publisher, build_storage, lo
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.context import Context
 from kaos.contracts.event import Event
+from kaos.contracts.llm import LLMProvider
 from kaos.contracts.publisher import Publisher
 from kaos.core.cache import (
     CONTENT_HASH,
@@ -23,6 +26,7 @@ from kaos.core.cache import (
     content_fingerprint,
 )
 from kaos.core.config import Settings
+from kaos.core.redaction import redact_secrets
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import (
     DiscordBackfillSource,
@@ -315,8 +319,14 @@ async def run_forum_backfill(
                     # Idempotent: nothing changed, so the conclusion is the same.
                     print("\nSin cambios en ningún hilo — no se publica (idempotente).")
                 else:
-                    report = _build_consolidated_report(
-                        forum_channel_id, workspace, summaries, agent_id=agent_id
+                    report = await _build_consolidated_report(
+                        forum_channel_id,
+                        workspace,
+                        summaries,
+                        agent,
+                        agent_id=agent_id,
+                        llm=llm,
+                        extra_instructions=extra_instructions,
                     )
                     await publisher.publish(report)
     finally:
@@ -328,30 +338,51 @@ async def run_forum_backfill(
     return 0
 
 
-def _build_consolidated_report(
+async def _build_consolidated_report(
     forum_channel_id: str,
     workspace: str,
     summaries: list[tuple[str, str, Artifact]],
+    agent: ResumeAgent,
     *,
     agent_id: str | None = None,
+    llm: LLMProvider | None = None,
+    extra_instructions: str = "",
 ) -> Artifact:
-    """Merge per-thread summaries into a single "Estado del Proyecto" report.
+    """Fuse per-thread summaries into a single "Estado del Proyecto" report.
 
-    The report references every source event across all threads, so the
-    consolidated knowledge stays fully traceable.
+    The **designated agent** (``agent_id`` from a subscription/console run)
+    synthesizes ONE unified executive report from the per-thread summaries
+    (unifying tasks, decisions and next steps) instead of stacking N similar
+    summaries under headers (Knowledge before Reports). The resume-agent reduces
+    the summaries; the task-agent consolidates them into its dated report; a
+    tool-using agent (dev-agent) runs its loop over them. If the synthesis is
+    empty, we fall back to a labeled concatenation so a report is still produced.
+    Either way the report references every source event across all threads, so
+    the consolidated knowledge stays fully traceable, and it is attributed to the
+    agent that produced it.
     """
-    header = (
-        f"# 📊 Estado del Proyecto\n\n"
-        f"_Consolidado de {len(summaries)} hilos · generado por KAOS_\n"
-    )
-    sections = [header]
+    sections: list[str] = []
     all_source_events: list[UUID] = []
     total_messages = 0
     for _thread_id, name, base in summaries:
-        body = base.content.get("summary", "")
-        sections.append(f"\n---\n\n# 🧵 {name}\n\n{body}")
+        body = str(base.content.get("summary", ""))
+        sections.append(f"## 🧵 {name}\n\n{body}")
         all_source_events.extend(base.source_events)
         total_messages += int(base.content.get("message_count", 0))
+
+    fused, produced_by = await _consolidate_sections(
+        agent_id, agent, llm, workspace=workspace, sections=sections
+    )
+    fused = fused.strip()
+    if fused:
+        summary = f"# 📊 Estado del Proyecto\n\n{fused}"
+    else:
+        # Fallback: keep the labeled concatenation so a report still ships.
+        header = (
+            f"# 📊 Estado del Proyecto\n\n"
+            f"_Consolidado de {len(summaries)} hilos · generado por KAOS_\n"
+        )
+        summary = "\n".join([header, *(f"\n---\n\n{s}" for s in sections)])
 
     metadata: dict[str, str] = {"forum_channel_id": forum_channel_id}
     if agent_id and agent_id.strip():
@@ -359,9 +390,9 @@ def _build_consolidated_report(
     return Artifact(
         kind="project.status",
         workspace=workspace,
-        produced_by="resume-agent",
+        produced_by=produced_by,
         content={
-            "summary": "\n".join(sections),
+            "summary": summary,
             "format": "markdown",
             "message_count": total_messages,
             "thread_count": len(summaries),
@@ -369,5 +400,63 @@ def _build_consolidated_report(
         source_events=tuple(all_source_events),
         metadata=metadata,
     )
+
+
+# Task framed for a tool-using agent (dev-agent) asked to consolidate threads.
+_CONSOLIDATE_TASK_PREFIX = (
+    "Consolidá los siguientes resúmenes por hilo del mismo proyecto en UN único "
+    "informe ejecutivo unificado, integrando y deduplicando tareas, conceptos, "
+    "decisiones, riesgos y asignaciones en un solo flujo coherente (no una "
+    "sección por hilo):\n\n"
+)
+
+
+async def _consolidate_sections(
+    agent_id: str | None,
+    resume_agent: ResumeAgent,
+    llm: LLMProvider | None,
+    *,
+    workspace: str,
+    sections: list[str],
+) -> tuple[str, str]:
+    """Consolidate per-thread ``sections`` using the designated agent.
+
+    Returns ``(text, produced_by)``. The resume-agent reduces the summaries into
+    one structured report; the task-agent runs its dated consolidation prompt;
+    the dev-agent runs its tool loop over the sections. Any unknown agent (or a
+    missing ``llm``) falls back to the resume-agent reduce, so consolidation is
+    always attributed to a real agent and never crashes.
+    """
+    aid = (agent_id or "").strip() or resume_agent.name
+
+    if aid == "task-agent" and llm is not None:
+        from kaos.plugins.agents import TaskAgent
+
+        task_arts = await TaskAgent(llm).run(
+            Context(workspace=workspace, params={"hilos": "\n\n".join(sections)})
+        )
+        return _agent_answer(task_arts), "task-agent"
+
+    if aid == "dev-agent" and llm is not None:
+        from kaos.plugins.agents import DevAgent
+        from kaos.plugins.tools import default_dev_tools
+
+        task = _CONSOLIDATE_TASK_PREFIX + "\n\n".join(sections)
+        dev_arts = await DevAgent(llm, default_dev_tools(Path.cwd())).run(
+            Context(workspace=workspace, params={"task": task})
+        )
+        return _agent_answer(dev_arts), "dev-agent"
+
+    # resume-agent (default): reduce the summaries into one structured report.
+    return await resume_agent.consolidate(sections), resume_agent.name
+
+
+def _agent_answer(artifacts: Sequence[Artifact]) -> str:
+    """Extract and redact the consolidated text from an agent's artifact."""
+    if not artifacts:
+        return ""
+    content = artifacts[0].content
+    text = str(content.get("answer") or content.get("summary") or "")
+    return redact_secrets(text).strip()
 
 

@@ -9,6 +9,7 @@ single completion (C).
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 
 from kaos.contracts.context import Context
 from kaos.contracts.event import Event
@@ -182,6 +183,111 @@ def test_send_message_unknown_about_artifact_is_ignored() -> None:
     result = asyncio.run(scenario())
     assert result["about_artifact"] is None
     assert result["response"]
+
+
+# ---- D: wider chat context (workspace/project/relations) ----
+
+
+def test_send_message_includes_workspace_context_when_scoped() -> None:
+    """With ``context_scope='workspace'`` prior knowledge grounds the answer."""
+    storage = InMemoryStorage()
+
+    async def scenario() -> dict[str, object]:
+        from kaos.contracts.artifact import Artifact
+
+        await storage.save_artifact(
+            Artifact(
+                kind="conversation.summary",
+                workspace=WS,
+                produced_by="resume-agent",
+                content={"summary": "Contexto previo importante del proyecto."},
+            )
+        )
+        # EchoLLMProvider echoes the user content (system prompt + transcript),
+        # so the grounding block shows up in the response when it was included.
+        return await send_message(
+            storage,
+            Settings(),
+            workspace=WS,
+            user_id="ana",
+            agent_id="resume-agent",
+            message="¿qué había?",
+            context_scope="workspace",
+        )
+
+    result = asyncio.run(scenario())
+    assert "Contexto previo importante del proyecto." in str(result["response"])
+
+
+def test_send_message_without_scope_excludes_wider_context() -> None:
+    """Default (``context_scope='none'``) keeps the historical thread-only behaviour."""
+    storage = InMemoryStorage()
+
+    async def scenario() -> dict[str, object]:
+        from kaos.contracts.artifact import Artifact
+
+        await storage.save_artifact(
+            Artifact(
+                kind="conversation.summary",
+                workspace=WS,
+                produced_by="resume-agent",
+                content={"summary": "Contexto previo importante del proyecto."},
+            )
+        )
+        return await send_message(
+            storage,
+            Settings(),
+            workspace=WS,
+            user_id="ana",
+            agent_id="resume-agent",
+            message="¿qué había?",
+        )
+
+    result = asyncio.run(scenario())
+    assert "Contexto previo importante del proyecto." not in str(result["response"])
+
+
+def test_gather_context_respects_token_budget() -> None:
+    """A tiny budget keeps only the newest summaries (packed newest-first)."""
+    from datetime import datetime
+
+    from kaos.contracts.artifact import Artifact
+    from kaos.plugins.dashboard.chat import gather_context
+
+    storage = InMemoryStorage()
+
+    async def scenario() -> str:
+        await storage.save_artifact(
+            Artifact(
+                kind="conversation.summary",
+                workspace=WS,
+                produced_by="resume-agent",
+                content={"summary": "viejo " * 100},
+                timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        await storage.save_artifact(
+            Artifact(
+                kind="conversation.summary",
+                workspace=WS,
+                produced_by="resume-agent",
+                content={"summary": "reciente " * 100},
+                timestamp=datetime(2026, 6, 1, tzinfo=UTC),
+            )
+        )
+        return await gather_context(
+            storage,
+            Settings(chat_context_tokens=60),
+            workspace=WS,
+            scope="workspace",
+            budget_tokens=60,
+        )
+
+    block = asyncio.run(scenario())
+    # Only the newest summary fits in the tiny budget; the block is non-empty.
+    assert "reciente" in block
+    assert "viejo" not in block
+    assert block.count("###") == 1
 
 
 # ---- C: dev-agent runs its tool loop from the chat ----

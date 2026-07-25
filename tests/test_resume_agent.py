@@ -297,3 +297,39 @@ def test_without_context_tokens_never_chunks() -> None:
     assert len(llm.map_calls) == 0
 
 
+def test_consolidate_fuses_summaries_into_one_report() -> None:
+    """Several per-thread summaries become ONE unified report (a reduce call)."""
+    from kaos.plugins.agents.resume_agent import CONSOLIDATE_USER_PREFIX
+
+    final = "# Resumen Ejecutivo\n## Estado\n- proyecto unificado"
+    llm = _ScriptedLLM(final=final)
+    agent = ResumeAgent(llm)
+
+    result = asyncio.run(
+        agent.consolidate(
+            [
+                "## 🧵 Backend\n- avanza el API",
+                "## 🧵 Frontend\n- falta la vista de reportes",
+            ]
+        )
+    )
+
+    assert result == final
+    # A single reduce call using the consolidation prefix (not one per thread).
+    assert len(llm.reduce_calls) == 1
+    assert len(llm.map_calls) == 0
+    assert llm.reduce_calls[0][1].content.startswith(CONSOLIDATE_USER_PREFIX)
+
+
+def test_consolidate_single_summary_returns_it_unchanged() -> None:
+    """A single thread needs no synthesis: return it (redacted) without an LLM call."""
+    llm = _ScriptedLLM(final="unused")
+    agent = ResumeAgent(llm)
+
+    result = asyncio.run(agent.consolidate(["# Resumen\n- único hilo"]))
+
+    assert result == "# Resumen\n- único hilo"
+    assert len(llm.calls) == 0
+
+
+

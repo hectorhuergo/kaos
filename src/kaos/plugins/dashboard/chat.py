@@ -16,9 +16,16 @@ from kaos.contracts.event import Event, utcnow
 from kaos.contracts.llm import Message
 from kaos.contracts.storage import Storage
 from kaos.core.agents import agent_catalog
+from kaos.core.chunking import estimate_tokens
 from kaos.core.config import Settings
+from kaos.core.knowledge import relate_workspaces
 from kaos.core.redaction import redact_secrets
 from kaos.plugins.agents import DevAgent
+from kaos.plugins.dashboard.service import (
+    load_projects,
+    load_relations,
+    resolve_workspaces,
+)
 from kaos.plugins.tools import default_dev_tools
 from kaos.sdk import EchoLLMProvider
 
@@ -27,6 +34,10 @@ USER_MESSAGE = "chat.message.user"
 ASSISTANT_MESSAGE = "chat.message.assistant"
 TURN_ARTIFACT = "chat.turn"
 CONTRIBUTION_EVENT = "message.contribution"
+
+# Chat context scopes: how far beyond the current thread the chat may look for
+# grounding knowledge (ADR-0025). ``none`` keeps the historical behaviour.
+CONTEXT_SCOPES = ("none", "workspace", "project", "relations")
 
 # Agents that work by running a tool-use loop instead of a single completion.
 TOOL_USING_AGENTS = frozenset({"dev-agent"})
@@ -105,6 +116,99 @@ def _session_title(kind: str, project: str | None, user_id: str) -> str:
     return f"{kind} · {user_id}"
 
 
+async def _scope_workspaces(
+    settings: Settings, workspace: str, scope: str
+) -> list[str]:
+    """Resolve which workspaces the requested ``scope`` spans (self included).
+
+    ``workspace`` → just the current one; ``project`` → every active-subscription
+    workspace sharing this one's project; ``relations`` → the workspaces linked to
+    it in the knowledge graph (project grouping, ad-hoc relations and the name
+    heuristic, ADR-0019). Falls back to the current workspace when nothing else
+    applies, so the context stays well-defined.
+    """
+    if scope == "workspace":
+        return [workspace]
+    all_ws = await resolve_workspaces(None, settings)
+    all_ws = list(dict.fromkeys([workspace, *all_ws]))
+    if scope == "project":
+        projects = await load_projects(settings, all_ws)
+        mine = (projects.get(workspace) or "").strip().lower()
+        if not mine:
+            return [workspace]
+        return [w for w in all_ws if (projects.get(w) or "").strip().lower() == mine]
+    if scope == "relations":
+        projects = await load_projects(settings, all_ws)
+        relations = await load_relations(settings, all_ws)
+        edges = relate_workspaces({w: w for w in all_ws}, projects=projects, relations=relations)
+        related = {workspace}
+        for edge in edges:
+            if edge.source == workspace:
+                related.add(edge.target)
+            elif edge.target == workspace:
+                related.add(edge.source)
+        return list(related)
+    return [workspace]
+
+
+async def gather_context(
+    storage: Storage,
+    settings: Settings,
+    *,
+    workspace: str,
+    scope: str,
+    budget_tokens: int,
+    exclude_session_id: str | None = None,
+) -> str:
+    """Build a grounding block from knowledge beyond the current chat thread.
+
+    Collects the most recent artifact summaries across the workspaces spanned by
+    ``scope`` (excluding the current session's own turns to avoid echoing the
+    live thread) and packs them until ``budget_tokens`` is reached — newest
+    first, so the most relevant knowledge always fits. Returns an empty string
+    when the scope is ``none``/unknown, the budget is non-positive, or nothing
+    relevant is found (the caller then behaves exactly as before). Summaries are
+    already redacted when produced, keeping secrets out of the LLM prompt.
+    """
+    if scope not in CONTEXT_SCOPES or scope == "none" or budget_tokens <= 0:
+        return ""
+
+    workspaces = await _scope_workspaces(settings, workspace, scope)
+    candidates: list[tuple[str, str, str, str]] = []  # (ts, ws, title, summary)
+    for ws in workspaces:
+        for art in await storage.list_artifacts(ws):
+            if exclude_session_id and _session_id_from(art) == exclude_session_id:
+                continue
+            summary = str(art.content.get("summary") or "").strip()
+            if not summary:
+                continue
+            title = artifact_friendly_title(art)
+            candidates.append((artifact_last_activity(art), ws, title, summary))
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda c: c[0], reverse=True)  # newest first
+    header = (
+        "Contexto adicional del conocimiento (workspace/proyecto/relaciones). "
+        "Úsalo como referencia para responder; no lo repitas literalmente:\n"
+    )
+    used = estimate_tokens(header)
+    blocks: list[str] = []
+    for _ts, ws, title, summary in candidates:
+        block = f"### {title} ({ws})\n{summary}"
+        cost = estimate_tokens(block)
+        if blocks and used + cost > budget_tokens:
+            break
+        blocks.append(block)
+        used += cost
+        if used >= budget_tokens:
+            break
+    if not blocks:
+        return ""
+    return header + "\n\n".join(blocks)
+
+
 async def _run_tool_agent(
     llm: object,
     agent_id: str,
@@ -155,6 +259,7 @@ async def send_message(
     session_id: str | None = None,
     title: str | None = None,
     about_artifact: str | None = None,
+    context_scope: str = "none",
     llm_provider: str | None = None,
     llm_model: str | None = None,
 ) -> dict[str, object]:
@@ -162,6 +267,9 @@ async def send_message(
 
     ``llm_provider``/``llm_model`` are an optional per-message override that wins
     over the global default (transient — not stored on the session).
+    ``context_scope`` (``none``/``workspace``/``project``/``relations``) widens
+    the grounding beyond the current thread up to ``settings.chat_context_tokens``
+    (ADR-0025).
     """
     if not workspace.strip():
         raise ValueError("workspace is required")
@@ -194,6 +302,19 @@ async def send_message(
             reference_block = f"Material de referencia (artifact {about.kind}):\n{ref}"
             if not project:
                 project = str(about.metadata.get("project") or "") or None
+
+    # Optional: widen the grounding with related knowledge (project/workspace/
+    # relations) up to the configured token budget (ADR-0025).
+    context_block = await gather_context(
+        storage,
+        resolved,
+        workspace=workspace,
+        scope=context_scope,
+        budget_tokens=resolved.chat_context_tokens,
+        exclude_session_id=session_id,
+    )
+    # The wider context comes first (background), then any anchored artifact.
+    grounding = "\n\n".join(b for b in (context_block, reference_block) if b)
 
     session_events = [e for e in events if _session_id_from(e) == session_id]
     session_artifacts = [a for a in artifacts if _session_id_from(a) == session_id]
@@ -245,13 +366,13 @@ async def send_message(
             workspace=workspace,
             message=message.strip(),
             prior=_history(session_events),
-            reference_block=reference_block,
+            reference_block=grounding,
         )
     else:
         system_prompt = _agent_prompt(agent_id)
         transcript = _history(current_events) or f"usuario: {message.strip()}"
-        if reference_block:
-            transcript = f"{reference_block}\n\n{transcript}"
+        if grounding:
+            transcript = f"{grounding}\n\n{transcript}"
         assistant_raw = await llm.complete(
             [
                 Message(role="system", content=system_prompt),

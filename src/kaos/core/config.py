@@ -82,6 +82,11 @@ class Settings(BaseModel):
     # Scheduler (Beta): seconds between recurring `kaos run` passes.
     scheduler_interval: float = 900.0
 
+    # Chat: token budget for the wider knowledge context the chat may include
+    # beyond the current thread (project/workspace/relations). ``0`` disables
+    # it regardless of the requested scope.
+    chat_context_tokens: int = 2000
+
     @field_validator("llm_provider")
     @classmethod
     def _valid_provider(cls, value: str) -> str:
@@ -131,6 +136,12 @@ class Settings(BaseModel):
         except ValueError:
             scheduler_interval = 900.0
 
+        ctx_tokens_raw = get("KAOS_CHAT_CONTEXT_TOKENS")
+        try:
+            chat_context_tokens = int(ctx_tokens_raw) if ctx_tokens_raw else 2000
+        except ValueError:
+            chat_context_tokens = 2000
+
         return cls(
             llm_provider=get("KAOS_LLM_PROVIDER") or "echo",
             llm_model=get("KAOS_LLM_MODEL") or "gpt-4o-mini",
@@ -152,5 +163,6 @@ class Settings(BaseModel):
             discord_message_limit=message_limit,
             database_url=get("KAOS_DATABASE_URL"),
             scheduler_interval=scheduler_interval,
+            chat_context_tokens=chat_context_tokens,
         )
 

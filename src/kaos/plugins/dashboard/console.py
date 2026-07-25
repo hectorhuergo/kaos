@@ -91,6 +91,9 @@ pre.out{white-space:pre-wrap;word-wrap:break-word;background:#0f1115;border:1px 
 .chat-item .ci-ico{margin-right:.35rem}
 .ctx-card{background:#12151c;border:1px solid #2f3646;border-radius:10px;padding:.8rem}
 .ctx-head{font-weight:600;margin-bottom:.4rem}
+.chat-meta-grid{display:grid;grid-template-columns:auto 1fr;gap:.15rem .6rem;align-items:baseline}
+.chat-meta-grid .cm-k{color:#6f7787}
+.chat-meta-grid .cm-v{color:#c7cdd8;word-break:break-word}
 .ctx-body{white-space:pre-wrap;font-size:.9rem;color:#cdd3dd;max-height:42vh;overflow:auto}
 .chat-anchor{margin:.1rem 0 .5rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .chat-grp{color:#6f7a89;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin:.75rem .2rem .3rem;display:flex;align-items:center;gap:.4rem}
@@ -695,6 +698,7 @@ function newChatSession(){
   renderThread([]);
   renderChatSide();
   renderChatCatalog();
+  renderChatMeta(null);
   toast('Nueva sesión (se creará al enviar)');
 }
 
@@ -826,7 +830,7 @@ function renderChatSide(){
     type:'chat', ref:i, ws:s.workspace,
     project:(s.project && String(s.project).trim()) || '',
     title:s.title || s.session_id,
-    meta:`${agentLabel(s.agent_id||'-')} · ${s.kind||'conversation'}${(s.message_count!=null)?' · '+s.message_count+' msg':''}`,
+    meta:`${agentLabel(s.agent_id||'-')}${(s.message_count!=null)?' · '+s.message_count+' msg':''}${s.model?(' · 🤖 '+esc(s.model)):''}${(s.updated_at)?(' · '+esc(shortDate(s.updated_at))):''}`,
     active:s.session_id===CURRENT_SESSION && !ABOUT_ARTIFACT,
     sort:String(s.updated_at || s.created_at || ''),
     search:[s.title,s.session_id,s.user_id,s.agent_id,s.project,s.kind,s.last_message,
@@ -898,6 +902,7 @@ function applyArtifactSelection(){
   renderAnchor(a);
   renderChatSide();
   renderChatCatalog();
+  renderChatMeta(null);
 }
 
 async function loadArtifactThread(reset){
@@ -1014,6 +1019,31 @@ function openChatSession(i){
   renderChatSide();
   renderChatCatalog();
   loadThread(s.workspace, s.session_id);
+  renderChatMeta(s);
+}
+
+// Read-only, full metadata of the active chat thread, shown inside «Más
+// opciones» so every relevant field is visible (mirrors the run headers).
+function renderChatMeta(s){
+  const box = $('#chat-meta'); if(!box) return;
+  if(!s){ box.innerHTML = ''; return; }
+  const rows = [
+    ['Sesión', s.session_id],
+    ['Agente', agentLabel(s.agent_id||'-')],
+    ['Modelo', s.model ? ('🤖 '+s.model) : ''],
+    ['Workspace', CHAT_LABELS[s.workspace]||s.workspace],
+    ['Proyecto', s.project],
+    ['Tipo', s.kind],
+    ['Usuario', s.user_id],
+    ['Mensajes', s.message_count!=null ? String(s.message_count) : ''],
+    ['Turnos', s.turn_count!=null ? String(s.turn_count) : ''],
+    ['Artefactos', s.artifacts!=null ? String(s.artifacts) : ''],
+    ['Creado', shortDate(s.created_at)],
+    ['Actualizado', shortDate(s.updated_at)],
+  ].filter(r => r[1] !== undefined && r[1] !== null && String(r[1]).trim() !== '');
+  box.innerHTML = '<div class="chat-meta-grid">'
+    + rows.map(r => `<span class="cm-k">${esc(r[0])}</span><span class="cm-v">${esc(String(r[1]))}</span>`).join('')
+    + '</div>';
 }
 
 async function sendChat(){
@@ -1033,6 +1063,7 @@ async function sendChat(){
     session_id: sessionId,
     title: $('#chat-title').value.trim() || null,
     about_artifact: ABOUT_ARTIFACT || null,
+    context_scope: $('#chat-scope') ? ($('#chat-scope').value || 'none') : 'none',
     llm_provider: $('#chat-llm-provider') ? ($('#chat-llm-provider').value || null) : null,
     llm_model: fieldValue('chat-llm-model'),
   };
@@ -1367,6 +1398,13 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
                 </select></div>
               <div><label for="chat-project">Proyecto</label>
                 <input id="chat-project" autocomplete="off" placeholder="(se autodetecta del workspace)"></div>
+              <div><label for="chat-scope">Contexto</label>
+                <select id="chat-scope" title="Cuánto conocimiento, además del hilo actual, incluir como contexto">
+                  <option value="none" selected>Ninguno (solo este hilo)</option>
+                  <option value="project">Proyecto</option>
+                  <option value="workspace">Workspace</option>
+                  <option value="relations">Relaciones</option>
+                </select></div>
               <div style="grid-column:1 / -1"><label for="chat-title">Título</label>
                 <input id="chat-title" autocomplete="off" placeholder="opcional"></div>
               <div><label for="chat-llm-provider">Proveedor LLM (opcional)</label>
@@ -1374,6 +1412,7 @@ def render_console(*, title: str = "KAOS — Consola") -> str:
               <div><label for="chat-llm-model">Modelo (opcional)</label>
                 <div id="chat-llm-model-wrap" data-model-id="chat-llm-model"></div></div>
             </div>
+            <div id="chat-meta" class="chat-meta muted" style="margin-top:.6rem;font-size:.8rem"></div>
           </details>
         </div>
       </div>

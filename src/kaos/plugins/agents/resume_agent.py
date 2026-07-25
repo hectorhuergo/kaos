@@ -61,10 +61,23 @@ REDUCE_USER_PREFIX = (
     "ejecutivo coherente que integre todos los tramos sin repetir secciones:\n\n"
 )
 
+# Consolidation: the user content that precedes several per-thread summaries so
+# the model fuses them into ONE unified executive report (not N stacked reports).
+CONSOLIDATE_USER_PREFIX = (
+    "A continuación hay resúmenes ejecutivos, uno por hilo/canal del MISMO "
+    "proyecto. Sintetiza UN único informe ejecutivo consolidado que unifique el "
+    "estado, las decisiones, los riesgos y los próximos pasos de todos los hilos "
+    "en un solo flujo coherente. NO crees una sección por hilo ni repitas los "
+    "encabezados: integra y deduplica la información:\n\n"
+)
+
 # Guards for the per-request input budget derived from the context window.
 _OUTPUT_RESERVE_RATIO = 0.35  # leave room for the model's own answer
 _SAFETY_MARGIN_TOKENS = 128
 _MIN_CHUNK_TOKENS = 256
+# Budget used when consolidating without a known context window: effectively
+# unbounded, so per-thread summaries are fused in a single reduce call.
+_UNBOUNDED_BUDGET = 1_000_000
 
 
 
@@ -215,12 +228,42 @@ class ResumeAgent:
             notes.append(redact_secrets(note.strip()))
         return await self._reduce_notes(notes, budget)
 
-    async def _reduce_notes(self, notes: list[str], budget: int) -> str:
+    async def consolidate(self, summaries: Sequence[str]) -> str:
+        """Fuse several per-thread summaries into ONE unified executive report.
+
+        Unlike concatenating the per-thread summaries (which yields N stacked
+        reports), this runs a *reduce* pass so the model synthesizes a single
+        coherent report that unifies state, decisions, risks and next steps
+        across every thread — respecting the agent's own structured prompt and
+        any user ``extra_instructions``. When a small ``context_tokens`` window
+        is known, the reduce is hierarchical so it fits (ADR-0024); otherwise it
+        is a single call (backward compatible). The result is redacted before it
+        becomes a published artifact.
+        """
+        notes = [s.strip() for s in summaries if s and s.strip()]
+        if not notes:
+            return ""
+        if len(notes) == 1:
+            return redact_secrets(notes[0])
+        budget = self._input_budget()
+        fused = await self._reduce_notes(
+            notes,
+            budget if budget is not None else _UNBOUNDED_BUDGET,
+            prefix=CONSOLIDATE_USER_PREFIX,
+        )
+        return redact_secrets(fused)
+
+    async def _reduce_notes(
+        self, notes: list[str], budget: int, *, prefix: str = REDUCE_USER_PREFIX
+    ) -> str:
         """Synthesize partial notes into the final structured report.
 
         If the concatenated notes still overflow the budget, they are first
         condensed in groups (a hierarchical reduce) until they fit, so very long
         conversations converge instead of overflowing the context again.
+
+        ``prefix`` is the user-content lead-in that frames the reduce for the
+        model (map-reduce of one conversation vs. consolidation across threads).
         """
         combined = self._join_notes(notes)
         if len(notes) > 1 and estimate_tokens(combined) > budget:
@@ -234,11 +277,11 @@ class ResumeAgent:
                     ]
                 )
                 merged.append(redact_secrets(condensed.strip()))
-            return await self._reduce_notes(merged, budget)
+            return await self._reduce_notes(merged, budget, prefix=prefix)
         return await self._llm.complete(
             [
                 Message(role="system", content=self._system_prompt()),
-                Message(role="user", content=f"{REDUCE_USER_PREFIX}{combined}"),
+                Message(role="user", content=f"{prefix}{combined}"),
             ]
         )
 
