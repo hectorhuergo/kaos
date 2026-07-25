@@ -62,7 +62,7 @@ from kaos.domain.subscription import GITHUB, KINDS, Subscription
 from kaos.plugins.agents.dev_agent import BASE_PROMPT as DEV_BASE_PROMPT
 from kaos.plugins.agents.resume_agent import SYSTEM_PROMPT as RESUME_BASE_PROMPT
 from kaos.plugins.agents.task_agent import SYSTEM_PROMPT as TASK_BASE_PROMPT
-from kaos.plugins.dashboard import render_dashboard
+from kaos.plugins.dashboard import render_cards_page, render_dashboard
 from kaos.plugins.dashboard.chat import (
     artifact_thread,
     list_sessions,
@@ -70,7 +70,6 @@ from kaos.plugins.dashboard.chat import (
     session_thread,
 )
 from kaos.plugins.dashboard.chat_manager import get_chat_manager
-from kaos.plugins.dashboard.run_manager import get_run_manager
 from kaos.plugins.dashboard.console import render_console
 from kaos.plugins.dashboard.directory import (
     resolve_header,
@@ -83,6 +82,7 @@ from kaos.plugins.dashboard.preview import (
     preview_github,
     preview_subscription,
 )
+from kaos.plugins.dashboard.run_manager import get_run_manager
 from kaos.plugins.dashboard.service import (
     artifacts_to_dicts,
     load_knowledge,
@@ -215,6 +215,7 @@ class ChatInput(BaseModel):
     session_id: str | None = None
     title: str | None = None
     about_artifact: str | None = None
+    context_scope: str = "none"
     llm_provider: str | None = None
     llm_model: str | None = None
 
@@ -392,6 +393,18 @@ def create_app(
             ]
         }
 
+    @app.get("/api/dashboard/cards")
+    async def api_dashboard_cards(
+        workspace: str = Query(...),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=8, ge=1, le=50),
+    ) -> dict[str, Any]:
+        """Return one page of a workspace's artifact cards (downward infinite
+        scroll on the dashboard). Rendered server-side so lazily loaded cards use
+        the exact same markup (version carousel + ``#node-<id>`` anchors)."""
+        artifacts = list(await _store().list_artifacts(workspace))
+        return render_cards_page(artifacts, offset=offset, limit=limit)
+
     # ---- Providers (persisted runtime config) ----
 
     async def _current_config() -> RuntimeConfig:
@@ -559,6 +572,7 @@ def create_app(
                 session_id=body.session_id,
                 title=body.title,
                 about_artifact=body.about_artifact,
+                context_scope=body.context_scope,
                 llm_provider=body.llm_provider,
                 llm_model=body.llm_model,
             )

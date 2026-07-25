@@ -67,6 +67,70 @@ def test_api_artifacts_returns_items(client: TestClient) -> None:
     assert payload[0]["items"][0]["metadata"]["thread_name"] == "PMO"
 
 
+def test_api_dashboard_cards_paginates() -> None:
+    """The dashboard cards endpoint returns a page of rendered cards + has_more."""
+    storage = InMemoryStorage()
+
+    async def seed() -> None:
+        for i in range(11):  # more than one page (_CARD_PAGE = 8)
+            await storage.save_artifact(
+                Artifact(
+                    kind="conversation.summary",
+                    workspace=WS,
+                    produced_by="resume-agent",
+                    content={"summary": f"# Hilo {i}", "message_count": 1},
+                    metadata={"thread_name": f"Hilo {i}", "model": "gpt-4o"},
+                )
+            )
+
+    asyncio.run(seed())
+    client = TestClient(create_app(Settings(), storage=storage))
+
+    first = client.get(
+        "/api/dashboard/cards", params={"workspace": WS, "offset": 0, "limit": 8}
+    )
+    assert first.status_code == 200
+    d1 = first.json()
+    assert d1["total"] == 11
+    assert d1["has_more"] is True
+    assert d1["next_offset"] == 8
+    assert "class='card'" in d1["html"]
+    assert d1["html"].count("class='card'") == 8
+
+    second = client.get(
+        "/api/dashboard/cards", params={"workspace": WS, "offset": 8, "limit": 8}
+    )
+    d2 = second.json()
+    assert d2["has_more"] is False
+    assert d2["next_offset"] == 11
+    assert d2["html"].count("class='card'") == 3
+
+
+def test_index_renders_pagination_sentinel_when_many_cards() -> None:
+    """The dashboard shows a `.cards-more` sentinel + scroll script when paging."""
+    storage = InMemoryStorage()
+
+    async def seed() -> None:
+        for i in range(10):
+            await storage.save_artifact(
+                Artifact(
+                    kind="conversation.summary",
+                    workspace=WS,
+                    produced_by="resume-agent",
+                    content={"summary": f"# Hilo {i}", "message_count": 1},
+                    metadata={"thread_name": f"Hilo {i}", "model": "gpt-4o"},
+                )
+            )
+
+    asyncio.run(seed())
+    client = TestClient(create_app(Settings(), storage=storage))
+    resp = client.get("/", params={"workspace": WS})
+    assert resp.status_code == 200
+    assert "cards-more" in resp.text
+    assert "loadMoreCards" in resp.text
+    assert "revealAnchorTarget" in resp.text
+
+
 def test_api_artifacts_returns_all_versions_of_a_thread() -> None:
     # The same thread summarized by two models is kept as two versions (the graph
     # is deduped to one node, but the view groups the versions into one card).

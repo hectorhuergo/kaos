@@ -144,8 +144,10 @@ def test_dashboard_renders_label_and_header() -> None:
 
 def test_graph_css_is_responsive_and_thin() -> None:
     html_doc = render_dashboard([("w", [])], KnowledgeGraph())
-    # Percentage max-width (not the previous max-width:none) and thinner strokes.
-    assert "max-width:100% !important" in html_doc
+    # Natural node sizing + scroll (not squeezed to the container) and thin strokes.
+    assert "useMaxWidth: false" in html_doc
     assert "stroke-width:1px" in html_doc
-    assert "useMaxWidth: true" in html_doc
+    # Responsive label sizes across breakpoints.
+    assert "@media (max-width:1024px)" in html_doc
+    assert "@media (max-width:640px)" in html_doc
 

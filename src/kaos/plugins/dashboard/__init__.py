@@ -26,20 +26,26 @@ h1{margin:0;font-size:1.3rem}
 .meta{color:#8a93a2;font-size:.85rem;margin-top:.3rem}
 main{padding:1.6rem;max-width:1100px;margin:0 auto}
 section{margin-bottom:2rem}
-.card{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem 1.2rem;margin:.8rem 0}
+.card{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem 1.2rem;margin:.8rem 0;scroll-margin-top:1rem}
+.card:target{border-color:#4f8cff;box-shadow:0 0 0 2px #4f8cff33}
 .card h3{margin:.1rem 0 .4rem}
 .tags{color:#8a93a2;font-size:.8rem;margin-bottom:.6rem}
 .tags span{margin-right:.9rem}
 pre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0;line-height:1.45}
-.graph{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem;overflow:auto;max-height:78vh}
-/* Scale the diagram to the container instead of letting a few nodes grow huge:
-   a percentage max-width + smaller fonts and thinner strokes keep small graphs
-   readable (see Mermaid useMaxWidth in the init script). */
-.mermaid{display:flex;justify-content:center}
-.mermaid svg{max-width:100% !important;height:auto}
+/* Traceability graph: render nodes at a natural, constant size and SCROLL when
+   the diagram is bigger than the viewport, instead of squeezing many nodes into
+   the container (which made labels unreadable) or blowing up a few nodes to fill
+   it. Mermaid's useMaxWidth is disabled in the init script for this to work. */
+.graph{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem;overflow:auto;max-height:80vh;resize:vertical}
+.mermaid{display:block;min-width:min-content}
+.mermaid svg{height:auto}
+.mermaid .node{cursor:pointer}
 .mermaid .node rect,.mermaid .node polygon,.mermaid .node circle,.mermaid .node path{stroke-width:1px}
 .mermaid .edgePath path,.mermaid .flowchart-link{stroke-width:1px !important}
-.mermaid .nodeLabel,.mermaid .edgeLabel,.mermaid span{font-size:11px}
+/* Responsive label sizes: readable on large screens, compact on small ones. */
+.mermaid .nodeLabel,.mermaid .edgeLabel,.mermaid span{font-size:14px}
+@media (max-width:1024px){.mermaid .nodeLabel,.mermaid .edgeLabel,.mermaid span{font-size:12px}}
+@media (max-width:640px){.mermaid .nodeLabel,.mermaid .edgeLabel,.mermaid span{font-size:11px}}
 .mermaid .edgeLabel{background:#161a22}
 /* Dashboard header: channel/forum details + indicators. */
 .hdr-sub{color:#8a93a2;font-size:.9rem;margin-top:.2rem}
@@ -61,9 +67,14 @@ pre{white-space:pre-wrap;word-wrap:break-word;font-family:inherit;margin:0;line-
 .ver-btn:hover{border-color:#4f8cff}
 .ver-label{color:#8a93a2;font-size:.82rem}
 .version[hidden]{display:none}
+.cards-more{display:flex;justify-content:center;padding:.8rem;color:#6f7a89;font-size:.8rem}
 """
 
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
+
+# How many artifact cards a workspace section renders before the rest load on
+# demand (downward infinite scroll — see `/api/dashboard/cards`).
+_CARD_PAGE = 8
 
 _SCRIPT = """
 function verNav(btn, dir){
@@ -77,7 +88,60 @@ function verNav(btn, dir){
   card.querySelector('.ver-label').textContent =
     (cur + 1) + ' / ' + vs.length + ' · 🤖 ' + (v.dataset.model || '—') + ' · ' + v.dataset.date;
 }
-"""
+
+// ---- Cards pagination: downward infinite scroll (reverse of the chat's) ----
+// Each workspace section renders its first page of cards server-side and, when
+// more remain, a `.cards-more` sentinel. As the sentinel scrolls into view we
+// fetch the next page and append the (identically rendered) cards before it.
+var CARD_LIMIT = %CARD_LIMIT%;
+
+async function loadMoreCards(sentinel){
+  if(!sentinel || sentinel.dataset.loading) return false;
+  sentinel.dataset.loading = '1';
+  var ws = sentinel.dataset.workspace, off = sentinel.dataset.offset;
+  try{
+    var r = await fetch('/api/dashboard/cards?workspace=' + encodeURIComponent(ws)
+      + '&offset=' + encodeURIComponent(off) + '&limit=' + CARD_LIMIT);
+    if(!r.ok) throw new Error('http ' + r.status);
+    var d = await r.json();
+    if(d.html) sentinel.insertAdjacentHTML('beforebegin', d.html);
+    if(d.has_more){ sentinel.dataset.offset = d.next_offset; sentinel.dataset.loading = ''; }
+    else { sentinel.remove(); }
+    return true;
+  }catch(e){
+    sentinel.dataset.loading = '';
+    sentinel.querySelector('.meta').textContent = 'No se pudo cargar más (reintentá al hacer scroll)';
+    return false;
+  }
+}
+
+function observeSentinels(){
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if(en.isIntersecting) loadMoreCards(en.target); });
+  }, { rootMargin: '400px' });
+  document.querySelectorAll('.cards-more').forEach(function(s){ io.observe(s); });
+  window.__cardObserver = io;
+}
+
+// A node click navigates to #node-<id>; if that card is not loaded yet, keep
+// pulling pages until it appears, then scroll to it (nodeLabel → artifact link).
+async function revealAnchorTarget(){
+  var h = location.hash;
+  if(!h || h.indexOf('#node-') !== 0) return;
+  var id = h.slice(1), guard = 0;
+  while(!document.getElementById(id) && guard++ < 200){
+    var s = document.querySelector('.cards-more');
+    if(!s) break;
+    var ok = await loadMoreCards(s);
+    if(!ok) break;
+  }
+  var el = document.getElementById(id);
+  if(el) el.scrollIntoView();
+}
+
+window.addEventListener('DOMContentLoaded', function(){ observeSentinels(); revealAnchorTarget(); });
+window.addEventListener('hashchange', revealAnchorTarget);
+""".replace("%CARD_LIMIT%", str(_CARD_PAGE))
 
 
 def render_dashboard(
@@ -106,20 +170,27 @@ def render_dashboard(
 
     sections: list[str] = []
     for workspace, artifacts in artifacts_by_workspace:
-        groups = group_artifacts(list(artifacts))
-        cards = "\n".join(_card_group(g) for g in groups) or (
-            "<p class='meta'>(sin artifacts)</p>"
-        )
+        page = render_cards_page(artifacts, offset=0, limit=_CARD_PAGE)
+        cards = page["html"] or "<p class='meta'>(sin artifacts)</p>"
+        sentinel = ""
+        if page["has_more"]:
+            sentinel = (
+                "<div class='cards-more' "
+                f"data-workspace='{html.escape(workspace)}' "
+                f"data-offset='{page['next_offset']}'>"
+                "<span class='meta'>Cargá más artefactos…</span></div>"
+            )
         label = labels.get(workspace, workspace)
         heading = html.escape(label)
         if label != workspace:
             heading += f"<span class='ws-id'>{html.escape(workspace)}</span>"
         metrics = summarize_workspace(artifacts)
         sections.append(
-            f"<section><h2>{heading}</h2>{_metrics_html(metrics)}\n{cards}</section>"
+            f"<section><h2>{heading}</h2>{_metrics_html(metrics)}\n"
+            f"<div class='cards'>{cards}</div>{sentinel}</section>"
         )
 
-    mermaid = html.escape(graph.to_mermaid())
+    mermaid = html.escape(graph.to_mermaid(click_prefix="#node-"))
     return f"""<!doctype html>
 <html lang="es">
 <head>
@@ -141,9 +212,9 @@ def render_dashboard(
 <script>
   mermaid.initialize({{
     startOnLoad: true, theme: "dark", securityLevel: "loose",
-    themeVariables: {{ fontSize: "12px" }},
-    flowchart: {{ useMaxWidth: true, htmlLabels: true,
-                 nodeSpacing: 25, rankSpacing: 35, padding: 6 }}
+    themeVariables: {{ fontSize: "14px" }},
+    flowchart: {{ useMaxWidth: false, htmlLabels: true,
+                 nodeSpacing: 30, rankSpacing: 45, padding: 8 }}
   }});
 </script>
 <script>{_SCRIPT}</script>
@@ -288,6 +359,40 @@ def _version_body(artifact: Artifact, *, hidden: bool) -> str:
     )
 
 
+def _ordered_groups(artifacts: Sequence[Artifact]) -> list[Sequence[Artifact]]:
+    """Group an artifact list into version-groups, newest node first.
+
+    Groups (a node's versions) are ordered by their most recent version's
+    timestamp so pagination is stable and shows the freshest knowledge first.
+    """
+    groups = group_artifacts(list(artifacts))
+    return sorted(groups, key=lambda g: g[0].timestamp, reverse=True)
+
+
+def render_cards_page(
+    artifacts: Sequence[Artifact], *, offset: int = 0, limit: int = _CARD_PAGE
+) -> dict[str, object]:
+    """Render one page of a workspace's artifact cards (for infinite scroll).
+
+    Returns the rendered card HTML for ``artifacts[offset:offset+limit]`` (as
+    version-grouped cards, newest node first) plus ``has_more``/``next_offset``
+    so the dashboard can lazily append the rest as the user scrolls down. Reuses
+    the same server-side card markup (versions carousel + ``#node-<id>`` anchors)
+    so lazily loaded cards are identical to the first page.
+    """
+    groups = _ordered_groups(artifacts)
+    total = len(groups)
+    window = groups[offset : offset + limit]
+    html_cards = "\n".join(_card_group(g) for g in window)
+    next_offset = offset + len(window)
+    return {
+        "html": html_cards,
+        "has_more": next_offset < total,
+        "next_offset": next_offset,
+        "total": total,
+    }
+
+
 def _card_group(artifacts: Sequence[Artifact]) -> str:
     """Render a node's artifacts as one card; multiple versions become a carousel.
 
@@ -313,7 +418,8 @@ def _card_group(artifacts: Sequence[Artifact]) -> str:
         _version_body(a, hidden=(i != 0)) for i, a in enumerate(artifacts)
     )
     return (
-        f"<div class='card'><h3>{html.escape(title)}</h3>"
+        f"<div class='card' id='node-{html.escape(str(first.id))}'>"
+        f"<h3>{html.escape(title)}</h3>"
         f"{nav}<div class='versions'>{versions}</div></div>"
     )
 

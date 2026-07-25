@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.event import Event
@@ -16,7 +17,7 @@ from kaos.core.knowledge import (
     build_graph,
     relate_workspaces,
 )
-from kaos.plugins.dashboard import render_dashboard
+from kaos.plugins.dashboard import render_cards_page, render_dashboard
 from kaos.plugins.dashboard.metrics import summarize_workspace
 from kaos.runtime import InMemoryStorage
 
@@ -102,6 +103,53 @@ def test_to_dict_and_mermaid() -> None:
     assert "n0[[" in mermaid
 
 
+def test_to_mermaid_click_prefix_links_artifacts() -> None:
+    storage = _seed()
+    graph = asyncio.run(build_graph(storage, [WS]))
+
+    # Default output has no click directives (unchanged behaviour).
+    assert "click " not in graph.to_mermaid()
+
+    linked = graph.to_mermaid(click_prefix="#node-")
+    # Artifact nodes get a click directive to their card anchor, in same tab.
+    artifact_ids = [n.id for n in graph.nodes if n.kind == ARTIFACT]
+    assert artifact_ids
+    assert 'click ' in linked
+    assert '"#node-' in linked
+    assert "_self" in linked
+    for aid in artifact_ids:
+        assert f'"#node-{aid}"' in linked
+
+
+def test_render_cards_page_paginates_newest_first() -> None:
+    from datetime import datetime
+
+    arts = [
+        Artifact(
+            kind="conversation.summary",
+            workspace=WS,
+            produced_by="resume-agent",
+            content={"summary": f"# Hilo {i}", "message_count": 1},
+            metadata={"thread_name": f"Hilo {i}", "model": "gpt-4o"},
+            timestamp=datetime(2026, 1, 1 + i, tzinfo=UTC),
+        )
+        for i in range(5)
+    ]
+
+    page = render_cards_page(arts, offset=0, limit=2)
+    assert page["total"] == 5
+    assert page["has_more"] is True
+    assert page["next_offset"] == 2
+    # Newest node first (Hilo 4 has the latest timestamp).
+    assert "Hilo 4" in str(page["html"])
+    assert str(page["html"]).count("class='card'") == 2
+
+    last = render_cards_page(arts, offset=4, limit=2)
+    assert last["has_more"] is False
+    assert last["next_offset"] == 5
+    assert str(last["html"]).count("class='card'") == 1
+
+
 def test_render_dashboard_embeds_summaries_and_graph() -> None:
     storage = _seed()
     artifacts = asyncio.run(storage.list_artifacts(WS))
@@ -119,6 +167,11 @@ def test_render_dashboard_embeds_summaries_and_graph() -> None:
     # importing the UMD build as a module fails silently and shows raw text.
     assert "<script src=" in html_doc
     assert "type=\"module\"" not in html_doc
+    # Each card is an anchor target and the graph nodes link to it (node → card).
+    assert "id='node-" in html_doc
+    assert "#node-" in html_doc
+    # Natural node sizing + scroll (not squeezed to the container width).
+    assert "useMaxWidth: false" in html_doc
 
 
 def test_workspace_metrics_capture_assets_agents_and_models() -> None:

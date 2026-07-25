@@ -97,11 +97,16 @@ class KnowledgeGraph:
             ],
         }
 
-    def to_mermaid(self) -> str:
+    def to_mermaid(self, *, click_prefix: str | None = None) -> str:
         """Render the graph as a Mermaid ``graph TD`` diagram.
 
         Node ids (UUIDs, ``discord:123``) are aliased to safe ``nN`` handles so
         the diagram stays valid regardless of the original id characters.
+
+        When ``click_prefix`` is given, each **artifact** node gets a Mermaid
+        ``click`` directive linking it to ``{click_prefix}{node.id}`` (e.g. a
+        ``#node-<id>`` anchor of its card), so clicking a node label jumps to the
+        corresponding artifact. Omitted by default (unchanged output).
         """
         alias = {node.id: f"n{i}" for i, node in enumerate(self.nodes)}
         shape = {WORKSPACE: ("[[", "]]"), ARTIFACT: ("[", "]"), EVENT: ("(", ")")}
@@ -114,6 +119,12 @@ class KnowledgeGraph:
             if src is None or tgt is None:
                 continue
             lines.append(f"    {src} -->|{edge.kind}| {tgt}")
+        if click_prefix:
+            for node in self.nodes:
+                if node.kind == ARTIFACT:
+                    lines.append(
+                        f'    click {alias[node.id]} "{click_prefix}{node.id}" _self'
+                    )
         return "\n".join(lines)
 
 
