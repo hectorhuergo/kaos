@@ -199,6 +199,12 @@ Genera el plugin (implementando su contrato) + su test, sin tocar el Core.
 | `exceeds available context size` con **Lemonade / llama.cpp** | Estos servidores fijan el contexto **al cargar el modelo** e **ignoran** el `num_ctx` por petición. Poné `KAOS_LLM_NUM_CTX` en el valor **real** con que cargaste el modelo (p. ej. 4096): el `resume-agent` **trocea** la conversación (map-reduce, ADR-0024) para caber. Para subir el contexto de verdad, cargá el modelo con `--ctx-size` mayor o usá **Ollama real**. |
 | `falta 'uvicorn'` en `kaos serve` | `uv pip install -e .[dashboard]`. |
 
+> **Contexto del chat (ADR-0025).** En la consola, «Más opciones → Contexto»
+> elige cuánto conocimiento incluir además del hilo actual: *Ninguno* (default),
+> *Proyecto*, *Workspace* o *Relaciones*. El presupuesto de tokens se controla con
+> `KAOS_CHAT_CONTEXT_TOKENS` (default 2000): KAOS empaca los resúmenes más nuevos
+> primero hasta ese límite.
+
 ## Siguiente paso
 
 - Arquitectura: [`ARCHITECTURE.md`](../ARCHITECTURE.md)

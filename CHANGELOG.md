@@ -1,6 +1,50 @@
 # Changelog
 
 ## Unreleased
+- Dashboard cards pagination: a workspace's artifact cards now render the first
+  page server-side and **lazily load the rest as you scroll down** (a downward
+  infinite scroll, the reverse of the chat's upward one), via a new
+  `/api/dashboard/cards?workspace=&offset=&limit=` endpoint that returns the
+  **same server-rendered card markup** (version carousel + `#node-<id>` anchors).
+  Node → card links keep working: navigating to a not-yet-loaded card's anchor
+  pulls pages until it appears, then scrolls to it. New pure helper
+  `kaos.plugins.dashboard.render_cards_page`.
+- Traceability graph UX: the dashboard graph now renders nodes at a **natural,
+  constant size and scrolls** when the diagram is larger than the viewport
+  (Mermaid `useMaxWidth: false`), instead of squeezing many nodes into the
+  container (unreadable) or blowing up a few to fill it. Label sizes are
+  **responsive** (14/12/11px across lg/md/xs). Each artifact **node links to its
+  card**: clicking a node jumps to `#node-<id>` (highlighted via `.card:target`),
+  wired through a new `KnowledgeGraph.to_mermaid(click_prefix=…)` (default output
+  unchanged). Card pagination / on-demand loading of events & older versions is
+  the next step.
+- Chat context (scoped): a chat turn can now include knowledge **beyond the
+  current thread** (ADR-0025). A new "Contexto" selector in the console's «Más
+  opciones» chooses the scope — Ninguno / Proyecto / Workspace / Relaciones —
+  sent as `context_scope`. `send_message` builds a grounding block from the most
+  recent artifact summaries across the scoped workspaces (project via the
+  ADR-0019 grouping, relations via the knowledge graph), packed newest-first up
+  to `KAOS_CHAT_CONTEXT_TOKENS` (`Settings.chat_context_tokens`, default 2000),
+  excluding the live session's own turns. Default `none` keeps the historical
+  thread-only behaviour (backward compatible). New helper
+  `kaos.plugins.dashboard.chat.gather_context`.
+- Console chat UX: chat thread headers are **normalized** to match the artifact
+  run headers (agent · N msg · 🤖 model · date), and «Más opciones» now shows a
+  read-only **metadata** panel with every field of the active thread (session,
+  agent, model, workspace, project, kind, user, messages/turns/artifacts,
+  created/updated).
+- Consolidated forum reports: running a forum subscription now produces a **single
+  unified executive report** instead of N per-thread summaries stacked under
+  headers. The **designated agent** (`agent_id` from the subscription/console run)
+  consolidates: the resume-agent reduces the summaries, the task-agent runs its
+  dated consolidation prompt, and a tool-using agent (dev-agent) runs its loop
+  over them; the report is attributed to that agent (`produced_by`/`agent_id`) and
+  saved to the designated thread (PMO / per-subscription `resume_thread_id`). It
+  reuses the ADR-0024 map-reduce (respecting the agent's structured prompt +
+  `extra_instructions`); with a small `KAOS_LLM_NUM_CTX` the reduce is
+  hierarchical so it fits; if the synthesis is empty it falls back to the previous
+  labeled concatenation. Traceability is preserved (every source event and the
+  aggregated message/thread counts).
 - LLM errors: a request timeout now surfaces an explicit reason instead of a bare
   `No se pudo contactar a ollama:` (httpx timeouts stringify empty). The message
   names the timeout, the configured limit and hints at `KAOS_LLM_TIMEOUT` — the
