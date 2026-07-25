@@ -121,6 +121,24 @@ def test_to_mermaid_click_prefix_links_artifacts() -> None:
         assert f'"#node-{aid}"' in linked
 
 
+def test_to_mermaid_anchors_links_any_node() -> None:
+    storage = _seed()
+    graph = asyncio.run(build_graph(storage, [WS]))
+
+    # An explicit anchors map lets a view link *any* node — including the
+    # workspace/subscription node, which had no click before (led nowhere).
+    anchors = {n.id: f"#ws-{n.id}" if n.kind == WORKSPACE else f"#node-{n.id}"
+               for n in graph.nodes}
+    linked = graph.to_mermaid(anchors=anchors)
+    assert f'"#ws-{WS}"' in linked  # workspace node now clickable
+    artifact_ids = [n.id for n in graph.nodes if n.kind == ARTIFACT]
+    for aid in artifact_ids:
+        assert f'"#node-{aid}"' in linked
+    # anchors takes precedence over click_prefix when both are given.
+    both = graph.to_mermaid(click_prefix="#node-", anchors=anchors)
+    assert f'"#ws-{WS}"' in both
+
+
 def test_render_cards_page_paginates_newest_first() -> None:
     from datetime import datetime
 
@@ -170,6 +188,9 @@ def test_render_dashboard_embeds_summaries_and_graph() -> None:
     # Each card is an anchor target and the graph nodes link to it (node → card).
     assert "id='node-" in html_doc
     assert "#node-" in html_doc
+    # The workspace/subscription node links to its section (was a dead node).
+    assert f"id='ws-{WS.replace(':', '-')}'" in html_doc
+    assert f'#ws-{WS.replace(":", "-")}' in html_doc
     # Natural node sizing + scroll (not squeezed to the container width).
     assert "useMaxWidth: false" in html_doc
 

@@ -10,13 +10,26 @@ can come later; this is the immediate, testable first version.
 from __future__ import annotations
 
 import html
+import re
 from collections.abc import Sequence
 from datetime import datetime
 
 from kaos.contracts.artifact import Artifact
 from kaos.contracts.event import utcnow
-from kaos.core.knowledge import KnowledgeGraph, group_artifacts
+from kaos.core.knowledge import ARTIFACT, WORKSPACE, KnowledgeGraph, group_artifacts
 from kaos.plugins.dashboard.metrics import summarize_workspace
+
+
+def _ws_anchor(workspace: str) -> str:
+    """A URL/HTML-safe anchor id for a workspace section.
+
+    Workspace ids carry ``:`` and ``/`` (``github:owner/repo``) which are fragile
+    in fragments/ids, so collapse everything outside ``[A-Za-z0-9_-]`` to ``-``.
+    Used both for the ``<section id>`` and the graph node's click target so a
+    workspace node in the traceability graph jumps to its cards.
+    """
+    return "ws-" + re.sub(r"[^A-Za-z0-9_-]+", "-", workspace).strip("-")
+
 
 _STYLE = """
 :root{color-scheme:light dark}
@@ -26,6 +39,8 @@ h1{margin:0;font-size:1.3rem}
 .meta{color:#8a93a2;font-size:.85rem;margin-top:.3rem}
 main{padding:1.6rem;max-width:1100px;margin:0 auto}
 section{margin-bottom:2rem}
+section[id]{scroll-margin-top:1rem}
+section:target>h2{color:#4f8cff}
 .card{background:#161a22;border:1px solid #262b36;border-radius:10px;padding:1rem 1.2rem;margin:.8rem 0;scroll-margin-top:1rem}
 .card:target{border-color:#4f8cff;box-shadow:0 0 0 2px #4f8cff33}
 .card h3{margin:.1rem 0 .4rem}
@@ -186,11 +201,21 @@ def render_dashboard(
             heading += f"<span class='ws-id'>{html.escape(workspace)}</span>"
         metrics = summarize_workspace(artifacts)
         sections.append(
-            f"<section><h2>{heading}</h2>{_metrics_html(metrics)}\n"
+            f"<section id='{_ws_anchor(workspace)}'><h2>{heading}</h2>{_metrics_html(metrics)}\n"
             f"<div class='cards'>{cards}</div>{sentinel}</section>"
         )
 
-    mermaid = html.escape(graph.to_mermaid(click_prefix="#node-"))
+    # Every node links somewhere: artifacts to their card anchor (#node-<id>,
+    # revealed on demand via card pagination) and workspaces to their section
+    # (#ws-<slug>, always present server-side). Previously workspace/subscription
+    # nodes had no click and led nowhere.
+    anchors: dict[str, str] = {}
+    for node in graph.nodes:
+        if node.kind == ARTIFACT:
+            anchors[node.id] = f"#node-{node.id}"
+        elif node.kind == WORKSPACE:
+            anchors[node.id] = f"#{_ws_anchor(node.id)}"
+    mermaid = html.escape(graph.to_mermaid(anchors=anchors))
     return f"""<!doctype html>
 <html lang="es">
 <head>

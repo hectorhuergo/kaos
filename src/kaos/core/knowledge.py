@@ -97,16 +97,27 @@ class KnowledgeGraph:
             ],
         }
 
-    def to_mermaid(self, *, click_prefix: str | None = None) -> str:
+    def to_mermaid(
+        self,
+        *,
+        click_prefix: str | None = None,
+        anchors: Mapping[str, str] | None = None,
+    ) -> str:
         """Render the graph as a Mermaid ``graph TD`` diagram.
 
         Node ids (UUIDs, ``discord:123``) are aliased to safe ``nN`` handles so
         the diagram stays valid regardless of the original id characters.
 
-        When ``click_prefix`` is given, each **artifact** node gets a Mermaid
-        ``click`` directive linking it to ``{click_prefix}{node.id}`` (e.g. a
-        ``#node-<id>`` anchor of its card), so clicking a node label jumps to the
-        corresponding artifact. Omitted by default (unchanged output).
+        Clickable nodes (jump to the corresponding card/section) are produced by
+        either of two mutually-exclusive options, both omitted by default so the
+        base output is unchanged:
+
+        - ``click_prefix``: each **artifact** node links to
+          ``{click_prefix}{node.id}`` (e.g. its ``#node-<id>`` card anchor).
+        - ``anchors``: an explicit ``node.id -> href`` map, so a view can link
+          *any* node (artifacts to ``#node-<id>``, workspaces to a safe
+          ``#ws-<slug>`` section anchor, …) with a fully-resolved href. When
+          given, it takes precedence over ``click_prefix``.
         """
         alias = {node.id: f"n{i}" for i, node in enumerate(self.nodes)}
         shape = {WORKSPACE: ("[[", "]]"), ARTIFACT: ("[", "]"), EVENT: ("(", ")")}
@@ -119,7 +130,12 @@ class KnowledgeGraph:
             if src is None or tgt is None:
                 continue
             lines.append(f"    {src} -->|{edge.kind}| {tgt}")
-        if click_prefix:
+        if anchors:
+            for node in self.nodes:
+                href = anchors.get(node.id)
+                if href:
+                    lines.append(f'    click {alias[node.id]} "{href}" _self')
+        elif click_prefix:
             for node in self.nodes:
                 if node.kind == ARTIFACT:
                     lines.append(
