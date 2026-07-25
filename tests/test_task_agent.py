@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-import pytest
 
 from kaos.contracts.context import Context
 from kaos.contracts.llm import Message
