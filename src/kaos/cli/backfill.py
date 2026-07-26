@@ -370,7 +370,7 @@ async def _build_consolidated_report(
         all_source_events.extend(base.source_events)
         total_messages += int(base.content.get("message_count", 0))
 
-    fused, produced_by = await _consolidate_sections(
+    fused, produced_by = await consolidate_sections(
         agent_id, agent, llm, workspace=workspace, sections=sections
     )
     fused = fused.strip()
@@ -411,7 +411,7 @@ _CONSOLIDATE_TASK_PREFIX = (
 )
 
 
-async def _consolidate_sections(
+async def consolidate_sections(
     agent_id: str | None,
     resume_agent: ResumeAgent,
     llm: LLMProvider | None,
@@ -426,6 +426,12 @@ async def _consolidate_sections(
     the dev-agent runs its tool loop over the sections. Any unknown agent (or a
     missing ``llm``) falls back to the resume-agent reduce, so consolidation is
     always attributed to a real agent and never crashes.
+
+    Shared across paths (forum consolidation and the single-workspace GitHub run)
+    so the **designated agent** is honored uniformly. The sections handed in are
+    already reduced summaries (produced by the resume-agent), so they fit the
+    model's context window even when the raw activity would not — task/dev agents
+    never see the oversized raw transcript.
     """
     aid = (agent_id or "").strip() or resume_agent.name
 

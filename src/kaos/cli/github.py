@@ -17,12 +17,14 @@ from kaos.bootstrap.factory import (
     build_storage,
     load_settings,
 )
+from kaos.cli.backfill import consolidate_sections
+from kaos.contracts.artifact import Artifact
 from kaos.contracts.publisher import Publisher
 from kaos.core.config import Settings
 from kaos.plugins.agents import ResumeAgent
 from kaos.plugins.connectors import GitHubConnector, GitHubRestSource
 from kaos.plugins.dashboard.chat import load_contributions
-from kaos.plugins.publishers import ConsolePublisher
+from kaos.plugins.publishers import CapturingPublisher, ConsolePublisher
 from kaos.runtime import InMemoryStorage, KaosRuntime
 
 
@@ -65,6 +67,13 @@ async def run_github(
 
     ``llm_provider``/``llm_model`` are an optional per-run override (from a
     subscription or a console run) that wins over the global default.
+
+    The **designated agent** (``agent_id``, from a subscription/console run) is
+    honored dynamically: the resume-agent always produces a chunk-aware reduced
+    summary of the activity (so it fits the model's context window); the default
+    run publishes that summary, while a designated task/dev agent synthesizes the
+    final report from that compact summary — never from the oversized raw
+    activity. This mirrors the forum consolidation path (ADR-0024/0025).
     """
     settings = await load_settings(settings, provider=llm_provider, model=llm_model)
     target = repo or settings.github_repo
@@ -83,37 +92,107 @@ async def run_github(
         return 1
 
     source = GitHubRestSource(token=token, repo=target, limit=limit, include_issues=include_issues)
-    storage = InMemoryStorage() if dry_run else build_storage(settings)
-    runtime = KaosRuntime(storage=storage)
-    runtime.register_connector(GitHubConnector(source, repo=target, emit_completed=True))
-    runtime.register_agent(
-        ResumeAgent(
-            llm,
-            extra_instructions=extra_instructions,
-            agent_id=agent_id,
-            context_tokens=settings.llm_num_ctx,
-        )
+    workspace = f"github:{target}"
+    resume_agent = ResumeAgent(
+        llm,
+        extra_instructions=extra_instructions,
+        agent_id=agent_id,
+        context_tokens=settings.llm_num_ctx,
     )
-    runtime.register_publisher(
-        publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
-    )
+    aid = (agent_id or "").strip() or resume_agent.name
+    default_agent = aid == resume_agent.name
+
+    real_storage = InMemoryStorage() if dry_run else build_storage(settings)
+    out_publisher = publisher or (ConsolePublisher() if dry_run else build_publisher(settings))
+
+    # The resume-agent always produces the chunk-aware reduced summary. For the
+    # default agent that summary IS the report (persisted by the runtime, as
+    # before). For a designated task/dev agent the summary is only the *compact
+    # input* they synthesize into the final report, so we keep it out of the DB
+    # (an in-memory storage) and persist just the one report per run.
+    summary_storage = real_storage if default_agent else InMemoryStorage()
 
     # Weigh human contributions made from the chat (any user message in this
     # workspace) when re-summarizing.
-    workspace = f"github:{target}"
-    runtime.prime_workspace(workspace, await load_contributions(storage, workspace))
+    contributions = await load_contributions(real_storage, workspace)
+
+    capturing = CapturingPublisher()
+    runtime = KaosRuntime(storage=summary_storage)
+    runtime.register_connector(GitHubConnector(source, repo=target, emit_completed=True))
+    runtime.register_agent(resume_agent)
+    runtime.register_publisher(capturing)
+    runtime.prime_workspace(workspace, contributions)
 
     print(f"KAOS github — {target} (dry_run={dry_run})\n")
     try:
         await runtime.start()
         await runtime.stop()
+        if not capturing.published:
+            print("(sin actividad para resumir)")
+            return 0
+        summary = capturing.published[0]
+        report = await _designated_report(
+            summary,
+            default_agent=default_agent,
+            agent_id=agent_id,
+            resume_agent=resume_agent,
+            llm=llm,
+            workspace=workspace,
+            storage=real_storage,
+        )
+        await out_publisher.publish(report)
     except httpx.HTTPStatusError as exc:
         print(f"error: GitHub respondió HTTP {exc.response.status_code}: {exc.response.text[:200]}")
         return 1
     finally:
-        close = getattr(storage, "close", None)
+        close = getattr(real_storage, "close", None)
         if close is not None:
             await close()
     print("Done.")
     return 0
+
+
+async def _designated_report(
+    summary: Artifact,
+    *,
+    default_agent: bool,
+    agent_id: str | None,
+    resume_agent: ResumeAgent,
+    llm: object,
+    workspace: str,
+    storage: object,
+) -> Artifact:
+    """The report to publish, produced by the designated agent.
+
+    For the default (resume) agent the reduced ``summary`` is the report as-is.
+    For a designated task/dev agent, that compact summary is synthesized into the
+    final report via the shared :func:`consolidate_sections` dispatcher; the
+    result is attributed to the designated agent and persisted (one report per
+    run). The summary's embedded transcript and ``source_events`` travel with the
+    report so the knowledge stays traceable (Everything is Traceable).
+    """
+    if default_agent:
+        return summary
+    section = str(summary.content.get("summary", ""))
+    text, produced_by = await consolidate_sections(
+        agent_id, resume_agent, llm, workspace=workspace, sections=[section]  # type: ignore[arg-type]
+    )
+    report = Artifact(
+        kind=summary.kind,
+        workspace=workspace,
+        produced_by=produced_by,
+        content={
+            "summary": text.strip() or section,
+            "format": "markdown",
+            "message_count": summary.content.get("message_count", 0),
+            "messages": summary.content.get("messages", []),
+        },
+        source_events=summary.source_events,
+        metadata={**summary.metadata, "agent_id": produced_by},
+    )
+    save = getattr(storage, "save_artifact", None)
+    if save is not None:
+        await save(report)
+    return report
+
 

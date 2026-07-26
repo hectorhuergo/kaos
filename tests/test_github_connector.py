@@ -132,3 +132,67 @@ def test_github_to_resume_pipeline() -> None:
     assert artifact.workspace == f"github:{REPO}"
     assert "[commit] feat: knowledge graph" in artifact.content["summary"]
 
+
+def test_designated_report_default_agent_returns_summary_unchanged() -> None:
+    """The default (resume) agent's reduced summary IS the report, as-is."""
+    from kaos.cli.github import _designated_report
+    from kaos.plugins.agents import ResumeAgent
+    from kaos.runtime import InMemoryStorage
+
+    summary = Artifact(
+        kind="conversation.summary",
+        workspace=f"github:{REPO}",
+        produced_by="resume-agent",
+        content={"summary": "# Resumen\n- ok", "message_count": 3},
+    )
+    resume_agent = ResumeAgent(EchoLLMProvider())
+    report = asyncio.run(
+        _designated_report(
+            summary,
+            default_agent=True,
+            agent_id=None,
+            resume_agent=resume_agent,
+            llm=EchoLLMProvider(),
+            workspace=f"github:{REPO}",
+            storage=InMemoryStorage(),
+        )
+    )
+    assert report is summary
+
+
+def test_designated_report_dispatches_to_task_agent() -> None:
+    """A designated task-agent synthesizes the report from the compact summary.
+
+    The task-agent never sees raw activity — only the resume-agent's reduced
+    summary — so the report is attributed to it and persisted (one per run).
+    """
+    from kaos.cli.github import _designated_report
+    from kaos.plugins.agents import ResumeAgent
+    from kaos.runtime import InMemoryStorage
+
+    summary = Artifact(
+        kind="conversation.summary",
+        workspace=f"github:{REPO}",
+        produced_by="resume-agent",
+        content={"summary": "actividad reducida del repo", "message_count": 5},
+    )
+    storage = InMemoryStorage()
+    report = asyncio.run(
+        _designated_report(
+            summary,
+            default_agent=False,
+            agent_id="task-agent",
+            resume_agent=ResumeAgent(EchoLLMProvider()),
+            llm=EchoLLMProvider(),  # echo -> the task-agent prompt is echoed back
+            workspace=f"github:{REPO}",
+            storage=storage,
+        )
+    )
+    assert report is not summary
+    assert report.produced_by == "task-agent"
+    assert report.metadata["agent_id"] == "task-agent"
+    assert report.source_events == summary.source_events
+    assert "actividad reducida del repo" in report.content["summary"]
+    assert asyncio.run(storage.list_artifacts(f"github:{REPO}"))
+
+

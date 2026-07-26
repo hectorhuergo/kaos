@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- GitHub run — dynamic designated agent (normalized with the forum path): the
+  single-workspace GitHub run (`kaos github` / `POST /api/run/subscription`) now
+  **honors the agent selected per-run or per-subscription** instead of always
+  behaving as the resume-agent and merely stamping the id. The resume-agent
+  always produces the **chunk-aware reduced summary** of the activity (so it fits
+  the model's context window); the default run publishes that summary, while a
+  designated **task/dev agent synthesizes the final report from that compact
+  summary** — never from the oversized raw activity, so it can't overflow the
+  context. Reuses the shared `consolidate_sections` dispatcher (renamed from
+  `_consolidate_sections`); one report per run is persisted and attributed to the
+  producing agent (`produced_by`/`metadata.agent_id`), carrying the summary's
+  transcript and `source_events` for traceability.
 - LLM provider — strict-template compatibility: consecutive same-role messages are
   now **folded into a single block** before the request is sent
   (`_consolidate_roles`). Strict chat templates (e.g. CodeGemma's Jinja template)
