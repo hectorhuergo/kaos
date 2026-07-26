@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- LLM provider — strict-template compatibility: consecutive same-role messages are
+  now **folded into a single block** before the request is sent
+  (`_consolidate_roles`). Strict chat templates (e.g. CodeGemma's Jinja template)
+  `raise_exception` when roles don't strictly alternate `user`/`assistant`, and
+  KAOS' prompt-chunking and tool-use paths legitimately emit several consecutive
+  `user` (or `assistant`) messages — which those backends rejected with a 500
+  (*"Conversation roles must alternate…"*). Folding runs of the same role keeps the
+  sequence perfectly alternating while preserving all content (blocks joined with a
+  blank line); providers that don't care about alternation see identical text. The
+  normalization applies to both the OpenAI-compatible path and Ollama's native
+  `/api/chat` path.
 - Traceability graph — clickable workspace nodes: a **workspace/subscription node**
   (e.g. `proyecto-x`, `JoseValperga/proyecto-x-grid`) now **links to its cards
   section** instead of leading nowhere. Each dashboard `<section>` gets a safe

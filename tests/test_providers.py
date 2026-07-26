@@ -286,6 +286,91 @@ def test_complete_omits_num_ctx_by_default() -> None:
     assert "num_ctx" not in seen
 
 
+def test_complete_consolidates_consecutive_same_role_messages() -> None:
+    """Consecutive same-role messages are folded into one before sending.
+
+    Strict chat templates (e.g. CodeGemma) ``raise_exception`` when roles don't
+    alternate. KAOS' chunking/tool-use paths emit several ``user`` messages in a
+    row, which triggered Ollama 500s. Folding runs of the same role keeps the
+    sequence alternating while preserving all content.
+    """
+    import asyncio
+    import json
+
+    import httpx
+
+    from kaos.contracts.llm import Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider(model="gpt-4o-mini", api_key="sk", client=client)
+
+    async def scenario() -> str:
+        try:
+            return await provider.complete(
+                [
+                    Message(role="system", content="sys"),
+                    Message(role="user", content="chunk 1"),
+                    Message(role="user", content="chunk 2"),
+                    Message(role="user", content="chunk 3"),
+                    Message(role="assistant", content="a1"),
+                    Message(role="assistant", content="a2"),
+                ]
+            )
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(scenario()) == "ok"
+    messages = seen["body"]["messages"]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant"]
+    assert messages[1]["content"] == "chunk 1\n\nchunk 2\n\nchunk 3"
+    assert messages[2]["content"] == "a1\n\na2"
+
+
+def test_complete_consolidates_roles_on_ollama_native() -> None:
+    """Role consolidation also applies on Ollama's native ``/api/chat`` path."""
+    import asyncio
+    import json
+
+    import httpx
+
+    from kaos.contracts.llm import Message
+    from kaos.plugins.providers import OpenAICompatibleLLMProvider
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "ok"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleLLMProvider.ollama(
+        model="codegemma", client=client, num_ctx=4096
+    )
+
+    async def scenario() -> str:
+        try:
+            return await provider.complete(
+                [
+                    Message(role="user", content="chunk 1"),
+                    Message(role="user", content="chunk 2"),
+                ]
+            )
+        finally:
+            await client.aclose()
+
+    assert asyncio.run(scenario()) == "ok"
+    messages = seen["body"]["messages"]
+    assert [m["role"] for m in messages] == ["user"]
+    assert messages[0]["content"] == "chunk 1\n\nchunk 2"
+
+
 def test_complete_wraps_transport_errors_as_llm_error() -> None:
     """A transport failure (no network) becomes an ``LLMError``, not a raw httpx one."""
     import asyncio

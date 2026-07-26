@@ -173,7 +173,9 @@ class OpenAICompatibleLLMProvider:
             self._current_task = task
 
         try:
-            rendered = [{"role": m.role, "content": m.content} for m in messages]
+            rendered = self._consolidate_roles(
+                [{"role": m.role, "content": m.content} for m in messages]
+            )
             # Ollama ignores a top-level ``num_ctx`` on its OpenAI-compatible
             # ``/v1/chat/completions`` endpoint; the context window can only be
             # raised per request via the *native* ``/api/chat`` API (inside an
@@ -196,6 +198,33 @@ class OpenAICompatibleLLMProvider:
         finally:
             if task and self._current_task == task:
                 self._current_task = old_task
+
+    @staticmethod
+    def _consolidate_roles(
+        messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Merge consecutive same-role messages into a single block.
+
+        Some chat templates (e.g. CodeGemma's Jinja template) require roles to
+        strictly alternate ``user``/``assistant`` and ``raise_exception`` the
+        moment two messages share the same role in a row. KAOS' prompt chunking
+        and tool-use paths legitimately emit several consecutive ``user`` (or
+        ``assistant``) messages, which those templates reject with a 500.
+
+        Folding runs of the same role into one message keeps the sequence
+        perfectly alternating for strict templates while preserving all content
+        (blocks are joined with a blank line). Providers that don't care about
+        alternation are unaffected — the merged text is identical.
+        """
+        consolidated: list[dict[str, str]] = []
+        for msg in messages:
+            if consolidated and consolidated[-1]["role"] == msg["role"]:
+                consolidated[-1]["content"] = (
+                    f"{consolidated[-1]['content']}\n\n{msg['content']}"
+                )
+            else:
+                consolidated.append(dict(msg))
+        return consolidated
 
     async def _post_with_retry(
         self,
